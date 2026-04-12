@@ -8,8 +8,8 @@
 - ✅ 依赖安装: 完整
 
 ### 2. API配置（腾讯云DeepSeek）
-- ✅ API Key: `_y82PeXl9UmxQ4I`
-- ✅ Base URL: `https://ms-cnhh7fpx-100005643178-sw.gw.ap-shanghai.ti.tencentcs.com/ms-cnhh7fpx/v1`
+- ✅ API Key: `YOUR_TENCENT_DEEPSEEK_KEY`
+- ✅ Base URL: `https://your-tencent-cloud-endpoint/v1`
 - ✅ Provider: `deepseek`
 - ✅ Model: `deepseek-chat`
 

@@ -42,8 +42,8 @@
 
 ### DeepSeek（腾讯云托管）
 ```env
-DEEPSEEK_API_KEY=_y82PeXl9UmxQ4I
-DEEPSEEK_BASE_URL=https://ms-cnhh7fpx-100005643178-sw.gw.ap-shanghai.ti.tencentcs.com/ms-cnhh7fpx/v1/
+DEEPSEEK_API_KEY=YOUR_TENCENT_DEEPSEEK_KEY
+DEEPSEEK_BASE_URL=https://your-tencent-cloud-endpoint/v1/
 ```
 
 ### 代理配置
