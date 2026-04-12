@@ -337,7 +337,7 @@ function generateMockLogs(symbol: string, interval: string): Array<{type: string
     { type: 'divider', text: '============================================================' },
     { type: 'info', text: '⚙️  配置信息：' },
     { type: 'info', text: '   Provider: deepseek' },
-    { type: 'info', text: '   Model: ms-cnhh7fpx (Tencent Cloud)' },
+    { type: 'info', text: '   Model: deepseek-chat (Tencent Cloud)' },
     { type: 'info', text: '   Temperature: 0.3' },
     { type: 'info', text: '   Max Tokens: 32768' },
     { type: 'divider', text: '============================================================' },
