@@ -311,6 +311,8 @@ def build_structured_prompt(
     # === 输出格式约束（含 JSON Schema，增强版）===
     output_block = f"""
 【输出格式】
+⚠️ 重要：只输出纯 JSON 对象，不要任何解释、推理过程或 markdown 代码块标记！
+
 1. 必须输出符合 Schema 的合法 JSON
 2. scenarios 概率总和不超过 1.05
 3. primary_scenario.direction 必须是 "up" 或 "down"

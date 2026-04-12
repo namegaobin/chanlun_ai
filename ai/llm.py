@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -129,6 +130,7 @@ class LLMClient:
         payload = {
             "model": self._config.model,
             "messages": [
+                {"role": "system", "content": "你是一个缠论结构分析引擎。你必须只输出纯 JSON，不要任何解释、推理过程或 markdown 标记。直接返回符合 Schema 的 JSON 对象。"},
                 {"role": "user", "content": prompt},
             ],
             "temperature": used_temperature,
@@ -176,6 +178,12 @@ class LLMClient:
         first_choice = choices[0]
         message = first_choice.get("message") or {}
         content = message.get("content")
+        
+        # 支持 DeepSeek 的 reasoning_content 字段（如果 content 为空）
+        if not isinstance(content, str) or not content:
+            reasoning_content = message.get("reasoning_content")
+            if isinstance(reasoning_content, str) and reasoning_content:
+                content = reasoning_content
 
         if not isinstance(content, str):
             raise RuntimeError(f"LLM 响应中未找到有效的文本内容：{data}")
@@ -230,9 +238,11 @@ def call_ai(
 
     # DeepSeek：提供 OpenAI 兼容接口
     if provider == "deepseek":
+        # 支持自定义 base_url（用于腾讯云等第三方服务）
+        base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
         cfg = LLMConfig(
             model=model,
-            base_url="https://api.deepseek.com/v1",
+            base_url=base_url,
             api_key=api_key,
             temperature=temperature,
             max_tokens=max_tokens,

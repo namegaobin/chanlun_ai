@@ -26,6 +26,9 @@ ENV/
 env/
 .venv/
 
+# Conda 环境符号链接
+conda_env
+
 # IDE
 .vscode/
 .idea/

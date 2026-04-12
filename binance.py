@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 import time
@@ -27,6 +28,12 @@ _BASE_URL = "https://api.binance.com"
 
 # 现货 K 线接口路径（官方文档：/api/v3/klines）
 _KLINES_PATH = "/api/v3/klines"
+
+# 代理配置（从环境变量读取，支持国内访问）
+_PROXY = os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy") or os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+
+# 代理设置
+_PROXIES = {"http": _PROXY, "https": _PROXY} if _PROXY else None
 
 
 def get_klines(symbol: str, interval: str, limit: int, start_time: int = None, max_retries: int = 3) -> List[Dict[str, Any]]:
@@ -77,7 +84,8 @@ def get_klines(symbol: str, interval: str, limit: int, start_time: int = None, m
             resp = requests.get(
                 _BASE_URL + _KLINES_PATH,
                 params=params,
-                timeout=10,
+                timeout=15,
+                proxies=_PROXIES,
             )
             
             if not resp.ok:

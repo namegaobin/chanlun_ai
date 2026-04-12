@@ -60,16 +60,23 @@ def load_api_config(provider: str = None, model: str = None, api_key_override: s
     return api_key, _provider, _model, temperature, max_tokens
 
 
+# 从环境变量读取默认K线数量
+DEFAULT_KLINE_LIMIT = int(os.getenv("DEFAULT_KLINE_LIMIT", "500"))
+
+
 def analyze_chanlun(
     symbol: str,
     interval: str,
-    limit: int = 500,
+    limit: int = None,
     test_mode: bool = False,
     mode: str = "structured",
     ai_provider: str = None,
     ai_model: str = None,
     api_key: str = None
 ):
+    # 使用环境变量默认值
+    if limit is None:
+        limit = DEFAULT_KLINE_LIMIT
     """
     执行缠论 AI 分析
 
@@ -164,6 +171,7 @@ def analyze_chanlun(
             temperature=temperature,
             max_tokens=max_tokens,
         )
+        print(f"[DEBUG] AI response length: {len(analysis_result)} chars, max_tokens={max_tokens}")
 
         # 7. 根据 mode 处理返回结果
         if mode == "table":
@@ -180,7 +188,11 @@ def analyze_chanlun(
         else:
             # 结构化模式：解析 JSON
             import json
+            import re
             clean_result = analysis_result.strip()
+            
+            # 尝试从响应中提取 JSON
+            # 方法1: 移除 markdown 代码块标记
             if clean_result.startswith("```json"):
                 clean_result = clean_result[7:]
             if clean_result.startswith("```"):
@@ -188,11 +200,16 @@ def analyze_chanlun(
             if clean_result.endswith("```"):
                 clean_result = clean_result[:-3]
             clean_result = clean_result.strip()
+            
+            # 方法2: 如果不是纯 JSON，尝试找到 JSON 对象
+            json_match = re.search(r'\{[\s\S]*\}', clean_result)
+            if json_match and not clean_result.startswith('{'):
+                clean_result = json_match.group(0)
 
             try:
                 structured_output = json.loads(clean_result)
             except json.JSONDecodeError:
-                return {"error": "Failed to parse AI response", "raw": clean_result}
+                return {"error": "Failed to parse AI response", "raw": clean_result[:500]}
 
             # 验证
             validated_output = validate_ai_output(structured_output)
