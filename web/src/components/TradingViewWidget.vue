@@ -35,14 +35,18 @@ let chart: echarts.ECharts | null = null
 const fetchKlines = async () => {
   loading.value = true
   try {
-    // 使用相对路径，开发环境由 Vite 代理，生产环境由 nginx 反向代理
+    // 动态检测 API 地址：开发环境用 8003 端口，生产环境用当前域名
+    const apiHost = window.location.port === '5173' 
+      ? `http://${window.location.hostname}:8003` 
+      : window.location.origin
+    
     let endpoint
     if (props.market === 'astock') {
-      endpoint = `/api/astock/kline/${props.symbol}/${props.interval}?limit=500`
+      endpoint = `${apiHost}/api/astock/kline/${props.symbol}/${props.interval}?limit=500`
     } else if (props.market === 'gold') {
-      endpoint = `/api/gold/kline/${props.interval}?limit=500`
+      endpoint = `${apiHost}/api/gold/kline/${props.interval}?limit=500`
     } else {
-      endpoint = `/api/kline/${props.symbol}/${props.interval}?limit=500`
+      endpoint = `${apiHost}/api/kline/${props.symbol}/${props.interval}?limit=500`
     }
     const response = await fetch(endpoint)
     const data = await response.json()
