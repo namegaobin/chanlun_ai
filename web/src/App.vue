@@ -3,13 +3,31 @@
     <!-- 顶部标题栏 -->
     <header class="app-header">
       <h1>缠论 AI 分析</h1>
+      <!-- 市场切换 -->
+      <div class="market-switch">
+        <button
+          class="market-btn"
+          :class="{ active: market === 'crypto' }"
+          @click="switchMarket('crypto')"
+        >加密货币</button>
+        <button
+          class="market-btn"
+          :class="{ active: market === 'astock' }"
+          @click="switchMarket('astock')"
+        >A 股</button>
+        <button
+          class="market-btn"
+          :class="{ active: market === 'gold' }"
+          @click="switchMarket('gold')"
+        >黄金</button>
+      </div>
     </header>
 
     <!-- 主内容区：左右分栏 -->
     <main class="main-content">
       <!-- 左侧：TradingView 图表 -->
       <section class="chart-section">
-        <TradingViewWidget :symbol="symbol" :interval="interval" />
+        <TradingViewWidget :symbol="symbol" :interval="interval" :market="market" />
       </section>
 
       <!-- 右侧：AI 分析面板 -->
@@ -23,6 +41,8 @@
           :aiProvider="aiProvider"
           :aiModel="aiModel"
           :apiKey="apiKey"
+          :market="market"
+          :displayName="astockDisplayName"
           @update:symbol="symbol = $event"
           @update:interval="interval = $event"
           @analyze="analyze"
@@ -76,13 +96,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue';
+import { ref, onMounted, watch, computed } from 'vue';
 import TradingViewWidget from '@/components/TradingViewWidget.vue';
 import AIAnalysisPanel from '@/components/AIAnalysisPanel.vue';
-import { analyzeAI } from '@/api/client';
+import { analyzeAI, analyzeAstockAI, analyzeGoldAI, ASTOCK_PRESETS, GOLD_PRESETS, type MarketType } from '@/api/client';
 
 import type { AIAnalysisResult } from '@/types/chanlun';
 
+const market = ref<MarketType>('crypto');
 const symbol = ref('BTCUSDT');
 const interval = ref('1h');
 const analysisMode = ref<'structured' | 'table'>('structured');
@@ -94,6 +115,35 @@ const showHistory = ref(false);
 const aiProvider = ref('deepseek');
 const aiModel = ref('deepseek-reasoner');
 const apiKey = ref('');
+
+// 市场切换时的默认值
+const cryptoDefaults = { symbol: 'BTCUSDT', interval: '1h' };
+const astockDefaults = { symbol: '000001', interval: '1d' };
+const goldDefaults = { symbol: 'XAUUSD', interval: '1h' };
+
+// 切换市场
+function switchMarket(newMarket: MarketType) {
+  if (market.value === newMarket) return;
+  market.value = newMarket;
+  if (newMarket === 'crypto') {
+    symbol.value = cryptoDefaults.symbol;
+    interval.value = cryptoDefaults.interval;
+  } else if (newMarket === 'astock') {
+    symbol.value = astockDefaults.symbol;
+    interval.value = astockDefaults.interval;
+  } else if (newMarket === 'gold') {
+    symbol.value = goldDefaults.symbol;
+    interval.value = goldDefaults.interval;
+  }
+  aiResult.value = null;
+}
+
+// A 股代码显示名
+const astockDisplayName = computed(() => {
+  if (market.value !== 'astock') return symbol.value;
+  const preset = ASTOCK_PRESETS.find(p => p.code === symbol.value);
+  return preset ? `${preset.name}(${symbol.value})` : symbol.value;
+});
 
 // 分析历史记录
 interface HistoryRecord {
@@ -111,7 +161,10 @@ function intervalDisplay(int: string): string {
     '15m': '15分',
     '1h': '1小时',
     '4h': '4小时',
-    '1d': '1天'
+    '1d': '1天',
+    '60m': '60分',
+    '1w': '周线',
+    '1M': '月线'
   };
   return map[int] || int;
 }
@@ -132,15 +185,38 @@ function formatPercentage(value: number | undefined): string {
 async function analyze() {
   analyzing.value = true;
   try {
-    const result = await analyzeAI(
-      symbol.value,
-      interval.value,
-      analysisMode.value,
-      false,
-      aiProvider.value,
-      aiModel.value,
-      apiKey.value
-    );
+    let result: AIAnalysisResult;
+    if (market.value === 'astock') {
+      result = await analyzeAstockAI(
+        symbol.value,
+        interval.value,
+        analysisMode.value,
+        false,
+        aiProvider.value,
+        aiModel.value,
+        apiKey.value
+      );
+    } else if (market.value === 'gold') {
+      result = await analyzeGoldAI(
+        symbol.value,
+        interval.value,
+        analysisMode.value,
+        false,
+        aiProvider.value,
+        aiModel.value,
+        apiKey.value
+      );
+    } else {
+      result = await analyzeAI(
+        symbol.value,
+        interval.value,
+        analysisMode.value,
+        false,
+        aiProvider.value,
+        aiModel.value,
+        apiKey.value
+      );
+    }
     aiResult.value = result;
 
     // 添加到历史记录
@@ -263,12 +339,46 @@ watch(analysisHistory, (newVal) => {
   border-bottom: 1px solid #E0E3EB;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .app-header h1 {
   font-size: 18px;
   font-weight: 600;
   color: #1a1a1a;
+}
+
+.market-switch {
+  display: flex;
+  gap: 4px;
+  background: #F0F0F0;
+  border-radius: 8px;
+  padding: 3px;
+}
+
+.market-btn {
+  padding: 5px 14px;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  background: transparent;
+  color: #666;
+  transition: all 0.2s;
+}
+
+.market-btn:hover {
+  color: #333;
+}
+
+.market-btn.active {
+  background: #FFFFFF;
+  color: #2962FF;
+  border-color: #2962FF;
+  box-shadow: 0 1px 3px rgba(41, 98, 255, 0.15);
 }
 
 .main-content {

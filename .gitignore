@@ -86,4 +86,7 @@ htmlcov/
 .ipynb_checkpoints/
 
 # 优化后的权重文件（运行时生成）
-optimized_weights.json
+optimized_weights.json.cache/
+.codebuddy/
+__pycache__/
+*.pyc

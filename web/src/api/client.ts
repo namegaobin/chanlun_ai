@@ -83,3 +83,101 @@ export async function analyzeAITest(
 
 // Export API instance for other uses
 export default api;
+
+// ─── A 股 API 函数 ─────────────────────────────────────────────
+
+// Get A-stock K-line and Chanlun data
+export async function getAstockKlineData(
+  symbol: string,
+  interval: string,
+  limit: number = 500
+): Promise<ChanlunData> {
+  const response = await api.get<ChanlunData>(`/astock/kline/${symbol}/${interval}`, {
+    params: { limit }
+  });
+  return response.data;
+}
+
+// A-stock AI Analysis
+export async function analyzeAstockAI(
+  symbol: string,
+  interval: string,
+  mode: 'structured' | 'table' = 'structured',
+  test: boolean = false,
+  aiProvider?: string,
+  aiModel?: string,
+  apiKey?: string
+): Promise<AIAnalysisResult> {
+  const response = await api.post<AIAnalysisResult>('/astock/analyze', {
+    symbol,
+    interval,
+    mode,
+    test,
+    limit: 500,
+    ai_provider: aiProvider,
+    ai_model: aiModel,
+    api_key: apiKey
+  });
+  return response.data;
+}
+
+// 市场类型
+export type MarketType = 'crypto' | 'astock' | 'gold';
+
+// A 股预设标的
+export const ASTOCK_PRESETS: Array<{ code: string; name: string }> = [
+  { code: '000001', name: '上证指数' },
+  { code: '600519', name: '贵州茅台' },
+  { code: '601318', name: '中国平安' },
+  { code: '600036', name: '招商银行' },
+  { code: '300750', name: '宁德时代' },
+  { code: '000858', name: '五粮液' },
+  { code: '601012', name: '隆基绿能' },
+];
+
+// A 股周期选项
+export const ASTOCK_INTERVALS: Array<{ value: string; label: string }> = [
+  { value: '15m', label: '15分' },
+  { value: '60m', label: '60分' },
+  { value: '1d', label: '日线' },
+  { value: '1w', label: '周线' },
+  { value: '1M', label: '月线' },
+];
+
+// 黄金预设标的
+export const GOLD_PRESETS: Array<{ code: string; name: string }> = [
+  { code: 'XAUUSD', name: '黄金现货' },
+];
+
+// 黄金周期选项（与加密货币相同）
+export const GOLD_INTERVALS: Array<{ value: string; label: string }> = [
+  { value: '15m', label: '15分' },
+  { value: '1h', label: '1小时' },
+  { value: '4h', label: '4小时' },
+  { value: '1d', label: '日线' },
+  { value: '1w', label: '周线' },
+  { value: '1M', label: '月线' },
+];
+
+// 黄金 AI 分析
+export async function analyzeGoldAI(
+  symbol: string,
+  interval: string,
+  mode: 'structured' | 'table' = 'structured',
+  test: boolean = false,
+  aiProvider?: string,
+  aiModel?: string,
+  apiKey?: string
+): Promise<AIAnalysisResult> {
+  const response = await api.post<AIAnalysisResult>('/gold/analyze', {
+    symbol,
+    interval,
+    mode,
+    test,
+    limit: 500,
+    ai_provider: aiProvider,
+    ai_model: aiModel,
+    api_key: apiKey
+  });
+  return response.data;
+}

@@ -41,6 +41,8 @@ class MergedKline:
         open_price: float,
         close: float,
         raw_indices: List[int] = None,
+        raw_high: float = None,  # 原始最高价（合并前所有K线的最高价）
+        raw_low: float = None,   # 原始最低价（合并前所有K线的最低价）
     ):
         self.index = index  # 合并后的索引
         self.date = date
@@ -49,9 +51,12 @@ class MergedKline:
         self.open = open_price
         self.close = close
         self.raw_indices = raw_indices or [index]  # 原始K线索引列表
+        # 保留原始极值（用于分型识别，确保不会丢失极端点）
+        self.raw_high = raw_high if raw_high is not None else high
+        self.raw_low = raw_low if raw_low is not None else low
     
     def __repr__(self):
-        return f"<MergedKline idx={self.index} H={self.high:.2f} L={self.low:.2f}>"
+        return f"<MergedKline idx={self.index} H={self.high:.2f} L={self.low:.2f} raw_H={self.raw_high:.2f} raw_L={self.raw_low:.2f}>"
 
 
 class SimpleFX:
@@ -173,8 +178,18 @@ class SimpleXD:
         # 时间与价格信息
         self.start_time = start_bi.start_time
         self.end_time = end_bi.end_time
-        self.start_price = start_bi.start_price
-        self.end_price = end_bi.end_price
+        
+        # 根据线段方向确定起止价格（确保连续性）
+        # 向上线段：从底分型开始 → 第一笔终点价格
+        # 向下线段：从顶分型开始 → 第一笔起点价格
+        if direction == "up":
+            # 向上线段：第一笔是向下笔，终点是底分型
+            self.start_price = start_bi.end_price
+            self.end_price = end_bi.end_price
+        else:
+            # 向下线段：第一笔是向上笔，起点是顶分型
+            self.start_price = start_bi.start_price
+            self.end_price = end_bi.end_price
         
         # 兼容 mapper.py 的分型结构
         start_kline = SimpleKline(self.start_time, self.start_price, self.start_price, self.start_price)
@@ -318,9 +333,9 @@ class SimpleICL:
         self.config = config or {}
         
         # 算法参数
-        self.bi_min_kline = self.config.get('bi_min_kline', 4)  # 笔的最小K线数量（合并后）
+        self.bi_min_kline = self.config.get('bi_min_kline', 5)  # 笔的最小K线数量（合并后）
         self.xd_min_bi = self.config.get('xd_min_bi', 3)  # 线段的最小笔数量
-        self.zs_min_bi = self.config.get('zs_min_bi', 3)  # 中枢的最小笔数量
+        self.zs_min_bi = self.config.get('zs_min_bi', 5)  # 中枢的最小笔数量
         
         # 中间结果
         self._merged_klines: List[MergedKline] = []
@@ -432,6 +447,8 @@ class SimpleICL:
             open_price=float(first['open']),
             close=float(first['close']),
             raw_indices=[0],
+            raw_high=float(first['high']),
+            raw_low=float(first['low']),
         ))
         
         for i in range(1, len(df)):
@@ -473,6 +490,9 @@ class SimpleICL:
                 prev.raw_indices.append(i)
                 # 保持日期为最后一根的日期
                 prev.date = row['date']
+                # ⭐ 保留原始极值（确保不丢失极端点）
+                prev.raw_high = max(prev.raw_high, curr_high)
+                prev.raw_low = min(prev.raw_low, curr_low)
             else:
                 # 无包含关系，直接添加新K线
                 merged.append(MergedKline(
@@ -483,6 +503,8 @@ class SimpleICL:
                     open_price=float(row['open']),
                     close=float(row['close']),
                     raw_indices=[i],
+                    raw_high=curr_high,
+                    raw_low=curr_low,
                 ))
         
         return merged
@@ -492,14 +514,16 @@ class SimpleICL:
     # ========================================
     
     def _calculate_fx(self, klines: List[MergedKline]) -> List[SimpleFX]:
-        """在合并后的K线上识别分型
+        """在合并后的K线上识别分型（使用原始极值）
         
-        顶分型：中间K线的高点是三根K线中最高的
-        底分型：中间K线的低点是三根K线中最低的
+        顶分型：中间K线的原始最高点是三根K线中最高的
+        底分型：中间K线的原始最低点是三根K线中最低的
         
         严格条件：
-        - 顶分型：k[i].high > k[i-1].high AND k[i].high > k[i+1].high
-        - 底分型：k[i].low < k[i-1].low AND k[i].low < k[i+1].low
+        - 顶分型：k[i].raw_high > k[i-1].raw_high AND k[i].raw_high > k[i+1].raw_high
+        - 底分型：k[i].raw_low < k[i-1].raw_low AND k[i].raw_low < k[i+1].raw_low
+        
+        注意：使用 raw_high/raw_low 确保合并K线时不会丢失极端点
         """
         if len(klines) < 3:
             return []
@@ -511,25 +535,26 @@ class SimpleICL:
             curr = klines[i]
             next_ = klines[i + 1]
             
+            # 使用原始极值进行分型识别
             # 顶分型判断（严格大于）
-            if curr.high > prev.high and curr.high > next_.high:
+            if curr.raw_high > prev.raw_high and curr.raw_high > next_.raw_high:
                 fx = SimpleFX(
                     fx_type="ding",
                     index=i,
                     kline=curr,
-                    price=curr.high,
+                    price=curr.raw_high,  # 使用原始最高价
                     time=curr.date,
                     raw_index=curr.raw_indices[-1] if curr.raw_indices else i,
                 )
                 fx_list.append(fx)
             
             # 底分型判断（严格小于）
-            elif curr.low < prev.low and curr.low < next_.low:
+            elif curr.raw_low < prev.raw_low and curr.raw_low < next_.raw_low:
                 fx = SimpleFX(
                     fx_type="di",
                     index=i,
                     kline=curr,
-                    price=curr.low,
+                    price=curr.raw_low,  # 使用原始最低价
                     time=curr.date,
                     raw_index=curr.raw_indices[-1] if curr.raw_indices else i,
                 )
@@ -538,7 +563,7 @@ class SimpleICL:
         return fx_list
     
     # ========================================
-    # 3. 笔的生成
+    # 3. 笔的生成（参考 chanClass.py 实现）
     # ========================================
     
     def _calculate_bi(
@@ -546,123 +571,169 @@ class SimpleICL:
         fx_list: List[SimpleFX],
         klines: List[MergedKline]
     ) -> List[SimpleBi]:
-        """根据分型生成笔
+        """根据分型生成笔（参考 chanClass.py 的实现）
         
-        笔的定义：
-        1. 从顶分型到底分型，或从底分型到顶分型
-        2. 两个分型之间至少有 bi_min_kline 根独立K线（不含分型的共用K线）
-        3. 顶底分型必须交替出现
+        核心逻辑：
+        1. 笔延伸：同类型分型，且更极端时延伸（替换）
+        2. 新笔生成：类型相反 + K线间隔>=4 + 价格关系满足
+        3. 分型修正：检查并修正倒数第二个分型是否是最极端的
         
-        特殊处理：
-        - 同类型分型之间，保留更极端的那个
-        - 笔的延伸：如果后续出现更高的顶或更低的底，延伸笔
+        价格关系条件：
+        - 向下笔（顶→底）：底分型的high < 顶分型的low
+        - 向上笔（底→顶）：顶分型的low > 底分型的high
+        
+        注意：chanClass.py 用 'up' 表示顶分型，'down' 表示底分型
+              engine.py 用 'ding' 表示顶分型，'di' 表示底分型
         """
         if len(fx_list) < 2:
             return []
         
-        # 第一步：过滤和修正分型，确保顶底交替且选择最极端的
-        filtered_fx = self._filter_fx_alternating(fx_list)
+        # stroke_list: 用于存储构成笔的分型（参考 chanClass.py）
+        # 这里的分型是经过筛选后构成笔端点的分型
+        stroke_list: List[SimpleFX] = []
         
-        if len(filtered_fx) < 2:
-            return []
+        for cur_fx in fx_list:
+            if len(stroke_list) < 1:
+                # 第一个分型直接加入
+                stroke_list.append(cur_fx)
+            else:
+                last_fx = stroke_list[-1]
+                pivot_flag = False
+                
+                # 1. 笔延伸逻辑：同类型分型
+                if last_fx.type == cur_fx.type:
+                    # 同类型分型：检查是否更极端
+                    if last_fx.type == "di":
+                        # 底分型：更低才延伸
+                        if cur_fx.val < last_fx.val:
+                            stroke_list[-1] = cur_fx
+                            pivot_flag = True
+                    else:
+                        # 顶分型：更高才延伸
+                        if cur_fx.val > last_fx.val:
+                            stroke_list[-1] = cur_fx
+                            pivot_flag = True
+                
+                # 2. 新笔生成逻辑：类型相反
+                else:
+                    # 检查K线间隔（chanClass.py 用 >3，即至少4根）
+                    kline_gap = cur_fx.index - last_fx.index
+                    
+                    # 检查价格关系（参考 chanClass.py 的条件）
+                    # chanClass.py: (cur_fx[3] == 'down' and cur_fx[1] < last_fx[1] and cur_fx[0] < last_fx[0])
+                    # 即：底分型需要 low < 顶分型.low 且 high < 顶分型.high
+                    # 顶分型需要 high > 底分型.high 且 low > 底分型.low
+                    price_valid = False
+                    
+                    if cur_fx.type == "di":
+                        # 当前是底分型，前一个是顶分型 -> 向下笔
+                        # 需要满足：底分型的low < 顶分型的low 且 底分型的high < 顶分型的high
+                        cur_low = cur_fx.k.low if cur_fx.k else cur_fx.val
+                        cur_high = cur_fx.k.high if cur_fx.k else cur_fx.val
+                        last_low = last_fx.k.low if last_fx.k else last_fx.val
+                        last_high = last_fx.k.high if last_fx.k else last_fx.val
+                        price_valid = cur_low < last_low and cur_high < last_high
+                    else:
+                        # 当前是顶分型，前一个是底分型 -> 向上笔
+                        # 需要满足：顶分型的high > 底分型的high 且 顶分型的low > 底分型的low
+                        cur_low = cur_fx.k.low if cur_fx.k else cur_fx.val
+                        cur_high = cur_fx.k.high if cur_fx.k else cur_fx.val
+                        last_low = last_fx.k.low if last_fx.k else last_fx.val
+                        last_high = last_fx.k.high if last_fx.k else last_fx.val
+                        price_valid = cur_high > last_high and cur_low > last_low
+                    
+                    # 满足条件：间隔足够 + 价格关系正确
+                    if kline_gap > 3 and price_valid:
+                        stroke_list.append(cur_fx)
+                        pivot_flag = True
+                
+                # 3. 分型修正（参考 chanClass.py 的 stroke_change 逻辑）
+                # 只在笔延伸或新增时检查倒数第二个分型
+                if pivot_flag and len(stroke_list) > 1:
+                    self._check_and_fix_second_last_fx(stroke_list, cur_fx, fx_list)
         
-        # 第二步：生成笔
+        # 4. 从 stroke_list 生成笔对象
         bis: List[SimpleBi] = []
         bi_index = 0
         
-        i = 0
-        while i < len(filtered_fx) - 1:
-            start_fx = filtered_fx[i]
-            end_fx = filtered_fx[i + 1]
+        for i in range(len(stroke_list) - 1):
+            start_fx = stroke_list[i]
+            end_fx = stroke_list[i + 1]
             
-            # 检查分型之间的K线数量
-            kline_count = end_fx.index - start_fx.index
-            if kline_count < self.bi_min_kline:
-                # K线数量不足，跳过这对分型
-                i += 1
-                continue
-            
-            # 确定笔的方向
-            if start_fx.type == "di" and end_fx.type == "ding":
-                direction = "up"
-            elif start_fx.type == "ding" and end_fx.type == "di":
-                direction = "down"
-            else:
-                # 不应该发生（经过 filter 后应该是交替的）
-                i += 1
-                continue
-            
-            # 检查是否需要延伸笔
-            # 向后查找是否有更极端的分型
-            actual_end_fx = end_fx
-            j = i + 2
-            while j < len(filtered_fx):
-                next_fx = filtered_fx[j]
-                if direction == "up" and next_fx.type == "ding":
-                    # 向上笔，检查是否有更高的顶
-                    if next_fx.val > actual_end_fx.val:
-                        actual_end_fx = next_fx
-                        j += 1
-                    else:
-                        break
-                elif direction == "down" and next_fx.type == "di":
-                    # 向下笔，检查是否有更低的底
-                    if next_fx.val < actual_end_fx.val:
-                        actual_end_fx = next_fx
-                        j += 1
-                    else:
-                        break
-                else:
-                    break
-            
-            # 创建笔
-            # 获取原始K线索引
-            start_raw_idx = start_fx.raw_index
-            end_raw_idx = actual_end_fx.raw_index
+            # 确定方向：底分型→顶分型=向上笔，顶分型→底分型=向下笔
+            direction = "up" if start_fx.type == "di" else "down"
             
             bi = SimpleBi(
                 index=bi_index,
                 direction=direction,
                 start_fx=start_fx,
-                end_fx=actual_end_fx,
-                start_index=start_raw_idx,
-                end_index=end_raw_idx,
+                end_fx=end_fx,
+                start_index=start_fx.raw_index,
+                end_index=end_fx.raw_index,
                 is_done=True,
             )
-            
-            # 检查与上一笔的方向是否交替
-            if bis and bis[-1].type == direction:
-                # 方向相同，需要合并或选择
-                # 如果方向相同，说明有问题，跳过
-                i += 1
-                continue
-            
             bis.append(bi)
             bi_index += 1
-            
-            # 移动到结束分型的位置
-            # 找到 actual_end_fx 在 filtered_fx 中的索引
-            try:
-                next_i = filtered_fx.index(actual_end_fx)
-                i = next_i
-            except ValueError:
-                i += 1
-        
-        # 最后一笔可能未完成
-        if bis and len(filtered_fx) > 0:
-            last_fx = filtered_fx[-1]
-            if bis[-1].end_fx != last_fx:
-                bis[-1]._is_done = False
         
         return bis
+    
+    def _check_and_fix_second_last_fx(
+        self,
+        stroke_list: List[SimpleFX],
+        cur_fx: SimpleFX,
+        original_fx_list: List[SimpleFX] = None
+    ) -> None:
+        """检查并修正倒数第二个分型
+        
+        参考 chanClass.py 的 stroke_change 逻辑：
+        - 当向下笔结束时，检查倒数第二个顶分型是否是最高的
+        - 当向上笔结束时，检查倒数第二个底分型是否是最低的
+        
+        重要：需要从原始分型列表中查找，而不是从 stroke_list 中
+        """
+        if len(stroke_list) < 3 or not original_fx_list:
+            return
+        
+        # stroke_list[-2] 是倒数第二个分型
+        second_last = stroke_list[-2]
+        second_last_time = second_last.time
+        
+        # 在原始分型列表中查找 stroke_list[-2] 之后、stroke_list[-1] 之前的分型
+        # 看是否有更极端的
+        best_fx = second_last
+        
+        # 遍历原始分型列表，找到时间在 second_last 和 cur_fx 之间的分型
+        for fx in original_fx_list:
+            # 跳过时间范围外的分型
+            if fx.time <= second_last_time or fx.time >= cur_fx.time:
+                continue
+            
+            # 只检查同类型分型
+            if fx.type != second_last.type:
+                continue
+            
+            # 检查是否更极端
+            if second_last.type == "ding":
+                # 顶分型，找更高的
+                if fx.val > best_fx.val:
+                    # 检查与当前分型的K线间隔是否足够
+                    if cur_fx.index - fx.index > 3:
+                        best_fx = fx
+            else:
+                # 底分型，找更低的
+                if fx.val < best_fx.val:
+                    if cur_fx.index - fx.index > 3:
+                        best_fx = fx
+        
+        # 如果找到了更极端的分型，替换
+        if best_fx != second_last:
+            stroke_list[-2] = best_fx
     
     def _filter_fx_alternating(self, fx_list: List[SimpleFX]) -> List[SimpleFX]:
         """过滤分型，确保顶底交替，同类型分型保留最极端的
         
-        算法：
-        1. 遍历所有分型
-        2. 如果与前一个分型类型相同，保留更极端的
-        3. 如果类型不同，直接添加
+        注意：这个方法现在不再被 _calculate_bi 使用
+        保留是为了兼容其他可能的用途
         """
         if not fx_list:
             return []
@@ -675,15 +746,12 @@ class SimpleICL:
             if fx.type == last.type:
                 # 同类型，保留更极端的
                 if fx.type == "ding":
-                    # 顶分型，保留更高的
                     if fx.val > last.val:
                         result[-1] = fx
                 else:
-                    # 底分型，保留更低的
                     if fx.val < last.val:
                         result[-1] = fx
             else:
-                # 类型不同，添加
                 result.append(fx)
         
         return result
@@ -745,227 +813,151 @@ class SimpleICL:
             )
     
     # ========================================
-    # 5. 线段的生成（特征序列法）
+    # 5. 线段的生成（基于笔的分型列表）
     # ========================================
     
     def _calculate_xd(self, bis: List[SimpleBi]) -> List[SimpleXD]:
-        """根据笔生成线段（基于特征序列分型）
+        """根据笔生成线段（完全重写，确保连续性）
         
         线段定义：
-        1. 线段由至少3笔组成
-        2. 线段的结束需要特征序列出现反向分型
+        1. 线段由笔构成，端点是分型
+        2. 相邻线段共享端点（前一线段终点 = 后一线段起点）
+        3. 特征序列分型识别线段端点
         
-        特征序列：
-        - 向上线段：取所有向下笔的高低点作为特征序列
-        - 向下线段：取所有向上笔的高低点作为特征序列
-        
-        线段破坏条件：
-        - 特征序列出现反向分型（底分型结束向上线段，顶分型结束向下线段）
+        算法：
+        1. 从笔中提取分型列表（笔端点的分型）
+        2. 在分型列表上识别顶底分型，确定线段端点
+        3. 确保线段连续：前一个端点 = 下一个线段的起点
         """
         if len(bis) < 3:
             return []
         
-        xds: List[SimpleXD] = []
-        xd_index = 0
+        # 从笔中提取分型列表：笔端点的分型
+        # fx_from_bi[0] = 第一笔的起点分型
+        # fx_from_bi[i] = 笔(i-1)的终点分型
+        fx_from_bi: List[SimpleFX] = [bis[0].start_fx]
+        for bi in bis:
+            fx_from_bi.append(bi.end_fx)
         
-        # 确定第一个线段的方向（使用前3笔）
-        # 如果是上下上，则是向上线段；如果是下上下，则是向下线段
-        if bis[0].type == "up":
-            # 上下上...开始，第一个线段是向上的
-            current_direction = "up"
-            start_bi_idx = 0
-        else:
-            # 下上下...开始，第一个线段是向下的
-            current_direction = "down"
-            start_bi_idx = 0
+        if len(fx_from_bi) < 5:
+            return []
         
-        i = start_bi_idx + 2  # 从第3笔开始检查
+        # 线段端点列表：存储线段端点的分型
+        # 确保相邻端点共享同一个分型对象，保证连续性
+        line_endpoints: List[SimpleFX] = []
         
-        while i < len(bis):
-            # 收集当前线段的笔
-            segment_bis = bis[start_bi_idx:i + 1]
+        # 第一个端点：第一个分型
+        line_endpoints.append(fx_from_bi[0])
+        
+        for i in range(4, len(fx_from_bi)):
+            # 检查顶分型（结束向上线段）
+            # 条件：data[-1]是顶分型，data[-3]高于data[-1]和data[-5]
+            if (fx_from_bi[i].type == 'ding' and 
+                fx_from_bi[i-2].val >= fx_from_bi[i].val and 
+                fx_from_bi[i-2].val >= fx_from_bi[i-4].val):
+                
+                # 找到顶分型端点：fx_from_bi[i-2]
+                candidate = fx_from_bi[i-2]
+                
+                # 最后一个端点是底分型才能添加顶分型
+                if line_endpoints[-1].type == 'di':
+                    # 检查间隔
+                    last_idx = fx_from_bi.index(line_endpoints[-1])
+                    if (i - 2 - last_idx) > 2:
+                        line_endpoints.append(candidate)
+                elif line_endpoints[-1].type == 'ding':
+                    # 同类型，延伸（取更高的）
+                    if candidate.val > line_endpoints[-1].val:
+                        line_endpoints[-1] = candidate
             
-            if len(segment_bis) < 3:
-                i += 1
+            # 检查底分型（结束向下线段）
+            # 条件：data[-1]是底分型，data[-3]低于data[-1]和data[-5]
+            if (fx_from_bi[i].type == 'di' and 
+                fx_from_bi[i-2].val <= fx_from_bi[i].val and 
+                fx_from_bi[i-2].val <= fx_from_bi[i-4].val):
+                
+                # 找到底分型端点：fx_from_bi[i-2]
+                candidate = fx_from_bi[i-2]
+                
+                # 最后一个端点是顶分型才能添加底分型
+                if line_endpoints[-1].type == 'ding':
+                    last_idx = fx_from_bi.index(line_endpoints[-1])
+                    if (i - 2 - last_idx) > 2:
+                        line_endpoints.append(candidate)
+                elif line_endpoints[-1].type == 'di':
+                    # 同类型，延伸（取更低的）
+                    if candidate.val < line_endpoints[-1].val:
+                        line_endpoints[-1] = candidate
+        
+        # 如果端点太少，无法形成线段
+        if len(line_endpoints) < 2:
+            return []
+        
+        # 从端点生成线段对象
+        xds: List[SimpleXD] = []
+        
+        for i in range(len(line_endpoints) - 1):
+            start_fx = line_endpoints[i]
+            end_fx = line_endpoints[i + 1]
+            
+            # 确定方向
+            if start_fx.type == 'di' and end_fx.type == 'ding':
+                direction = 'up'
+            elif start_fx.type == 'ding' and end_fx.type == 'di':
+                direction = 'down'
+            else:
+                # 类型相同，跳过
                 continue
             
-            # 构建特征序列
-            features = self._build_feature_sequence(segment_bis, current_direction)
+            # 找到对应的笔范围
+            start_bi_idx = None
+            end_bi_idx = None
             
-            # 检查特征序列是否出现反向分型
-            fx_type, fx_index = self._check_feature_fx(features, current_direction)
+            for j, bi in enumerate(bis):
+                # 找包含起点分型的笔
+                if start_bi_idx is None:
+                    if bi.start_fx == start_fx or bi.end_fx == start_fx:
+                        start_bi_idx = j
+                # 找包含终点分型的笔
+                if bi.end_fx == end_fx:
+                    end_bi_idx = j
             
-            if fx_type is not None:
-                # 找到反向分型，线段结束
-                # 确定线段结束的笔
-                end_bi = segment_bis[-1]
-                
-                # 如果是向上线段，找到最高点对应的笔
-                if current_direction == "up":
-                    max_price = max(b.end_price for b in segment_bis if b.type == "up")
-                    for b in reversed(segment_bis):
-                        if b.type == "up" and b.end_price == max_price:
-                            end_bi = b
-                            break
-                else:
-                    min_price = min(b.end_price for b in segment_bis if b.type == "down")
-                    for b in reversed(segment_bis):
-                        if b.type == "down" and b.end_price == min_price:
-                            end_bi = b
-                            break
-                
-                # 创建线段
-                start_bi = bis[start_bi_idx]
-                xd = SimpleXD(
-                    index=xd_index,
-                    direction=current_direction,
-                    start_bi=start_bi,
-                    end_bi=end_bi,
-                    bi_list=segment_bis[:segment_bis.index(end_bi) + 1] if end_bi in segment_bis else segment_bis,
-                    is_done=True,
-                )
-                xds.append(xd)
-                xd_index += 1
-                
-                # 切换方向，更新起始位置
-                current_direction = "down" if current_direction == "up" else "up"
-                # 新线段从结束点开始
-                try:
-                    start_bi_idx = bis.index(end_bi)
-                except ValueError:
-                    start_bi_idx = i
-                i = start_bi_idx + 2
-            else:
-                i += 1
-        
-        # 处理最后可能未完成的线段
-        if start_bi_idx < len(bis) - 2:
-            remaining_bis = bis[start_bi_idx:]
-            if len(remaining_bis) >= 3:
-                start_bi = remaining_bis[0]
-                end_bi = remaining_bis[-1]
-                
-                # 确定实际结束笔
-                if current_direction == "up":
-                    max_price = max(b.end_price for b in remaining_bis if b.type == "up")
-                    for b in reversed(remaining_bis):
-                        if b.type == "up" and b.end_price == max_price:
-                            end_bi = b
-                            break
-                else:
-                    min_price = min(b.end_price for b in remaining_bis if b.type == "down")
-                    for b in reversed(remaining_bis):
-                        if b.type == "down" and b.end_price == min_price:
-                            end_bi = b
-                            break
-                
-                xd = SimpleXD(
-                    index=xd_index,
-                    direction=current_direction,
-                    start_bi=start_bi,
-                    end_bi=end_bi,
-                    bi_list=remaining_bis,
-                    is_done=False,  # 未完成的线段
-                )
-                xds.append(xd)
+            if start_bi_idx is None or end_bi_idx is None:
+                continue
+            
+            # 关键修复：如果起点分型在笔的终点，线段应从下一笔开始
+            # 因为：
+            # - 向下线段从顶分型开始，第一笔应该是向下笔
+            # - 向上线段从底分型开始，第一笔应该是向上笔
+            # - 如果分型在笔的终点，那笔是相反方向的，下一笔才是正确方向
+            if bis[start_bi_idx].end_fx == start_fx:
+                start_bi_idx += 1
+            
+            if start_bi_idx >= end_bi_idx:
+                continue
+            
+            bi_list = bis[start_bi_idx:end_bi_idx + 1]
+            start_bi = bis[start_bi_idx]
+            end_bi = bis[end_bi_idx]
+            
+            # 线段价格和时间直接使用端点分型的值（确保连续性）
+            xd = SimpleXD(
+                index=len(xds),
+                direction=direction,
+                start_bi=start_bi,
+                end_bi=end_bi,
+                bi_list=bi_list,
+                is_done=True,
+            )
+            # 覆盖起止价格和时间，使用分型值确保连续
+            xd.start_price = start_fx.val
+            xd.end_price = end_fx.val
+            xd.start_time = start_fx.time
+            xd.end_time = end_fx.time
+            
+            xds.append(xd)
         
         return xds
-    
-    def _build_feature_sequence(
-        self,
-        bis: List[SimpleBi],
-        direction: str
-    ) -> List[Tuple[float, float]]:
-        """构建特征序列
-        
-        向上线段：取向下笔作为特征序列，每笔的(high, low)
-        向下线段：取向上笔作为特征序列，每笔的(high, low)
-        """
-        features = []
-        
-        for bi in bis:
-            if direction == "up" and bi.type == "down":
-                # 向上线段，取向下笔
-                features.append((bi.high, bi.low))
-            elif direction == "down" and bi.type == "up":
-                # 向下线段，取向上笔
-                features.append((bi.high, bi.low))
-        
-        return features
-    
-    def _check_feature_fx(
-        self,
-        features: List[Tuple[float, float]],
-        direction: str
-    ) -> Tuple[Optional[str], Optional[int]]:
-        """检查特征序列是否出现反向分型
-        
-        向上线段等待底分型：三个特征元素，中间的low最低
-        向下线段等待顶分型：三个特征元素，中间的high最高
-        
-        返回：(分型类型, 分型索引) 或 (None, None)
-        """
-        if len(features) < 3:
-            return None, None
-        
-        # 处理特征序列的包含关系
-        merged_features = self._merge_features(features, direction)
-        
-        if len(merged_features) < 3:
-            return None, None
-        
-        # 检查最后三个特征元素
-        for i in range(len(merged_features) - 2):
-            f1 = merged_features[i]
-            f2 = merged_features[i + 1]
-            f3 = merged_features[i + 2]
-            
-            if direction == "up":
-                # 向上线段，等待底分型（中间最低）
-                if f2[1] < f1[1] and f2[1] < f3[1]:
-                    return "di", i + 1
-            else:
-                # 向下线段，等待顶分型（中间最高）
-                if f2[0] > f1[0] and f2[0] > f3[0]:
-                    return "ding", i + 1
-        
-        return None, None
-    
-    def _merge_features(
-        self,
-        features: List[Tuple[float, float]],
-        direction: str
-    ) -> List[Tuple[float, float]]:
-        """处理特征序列的包含关系"""
-        if len(features) < 2:
-            return features
-        
-        merged = [features[0]]
-        
-        for feat in features[1:]:
-            prev = merged[-1]
-            
-            # 检查包含关系
-            has_contain = (
-                (feat[0] <= prev[0] and feat[1] >= prev[1]) or
-                (feat[0] >= prev[0] and feat[1] <= prev[1])
-            )
-            
-            if has_contain:
-                # 根据线段方向决定合并方式
-                if direction == "up":
-                    # 向上线段，特征序列向下，取低低
-                    new_high = min(feat[0], prev[0])
-                    new_low = min(feat[1], prev[1])
-                else:
-                    # 向下线段，特征序列向上，取高高
-                    new_high = max(feat[0], prev[0])
-                    new_low = max(feat[1], prev[1])
-                merged[-1] = (new_high, new_low)
-            else:
-                merged.append(feat)
-        
-        return merged
     
     # ========================================
     # 6. 线段力度计算

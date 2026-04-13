@@ -20,6 +20,11 @@ import asyncio
 from binance import get_klines
 from chanlun_adapter import convert_to_chanlun_bars
 from chanlun_local.engine import ChanlunEngine, EngineConfig
+from astock import get_klines as astock_get_klines
+from astock_adapter import convert_to_chanlun_bars as astock_convert_to_chanlun_bars
+from gold import get_klines as gold_get_klines
+from gold_adapter import convert_to_chanlun_bars as gold_convert_to_chanlun_bars
+from gold_realtime import get_realtime_price
 
 app = FastAPI()
 
@@ -237,6 +242,282 @@ async def get_analysis_result(task_id: str):
         return result
     return {"error": "Task not found"}
 
+
+# ─── A 股端点（独立于 Binance，不影响现有功能）────────────────────────────
+
+@app.get("/api/astock/kline/{symbol}/{interval}")
+async def get_astock_kline(symbol: str, interval: str, limit: int = 500):
+    try:
+        raw_klines = astock_get_klines(symbol, interval, limit)
+
+        if not raw_klines or len(raw_klines) < 3:
+            return {"error": "Insufficient A-stock data"}
+
+        engine_klines = [
+            {
+                "date": k["open_time"],
+                "open": k["open"],
+                "high": k["high"],
+                "low": k["low"],
+                "close": k["close"],
+                "volume": k.get("volume", 0),
+            }
+            for k in raw_klines
+        ]
+
+        config = EngineConfig()
+        engine_wrapper = ChanlunEngine(config)
+        icl_result = engine_wrapper.analyze_klines(
+            code=symbol,
+            frequency=interval,
+            klines=engine_klines
+        )
+
+        bi_list = icl_result.get_bis()
+        xd_list = icl_result.get_xds()
+        bi_zs_list = icl_result.get_bi_zss()
+        fx_list = icl_result.get_fx_list()
+
+        frontend_bars = astock_convert_to_chanlun_bars(raw_klines)
+
+        result = {
+            "meta": {"symbol": symbol, "interval": interval, "count": len(frontend_bars), "market": "astock"},
+            "klines": frontend_bars,
+            "bi": [
+                {
+                    "index": bi.index,
+                    "type": bi.type,
+                    "start_price": bi.start_price,
+                    "end_price": bi.end_price,
+                    "start_date": str(bi.start_time),
+                    "end_date": str(bi.end_time),
+                    "buy_sell_point": bi.mmds[0].name if bi.mmds and len(bi.mmds) > 0 else None
+                }
+                for bi in bi_list
+            ],
+            "xd": [
+                {"index": xd.index, "type": xd.type, "start_price": xd.start_price,
+                 "end_price": xd.end_price, "start_date": str(xd.start_time),
+                 "end_date": str(xd.end_time)}
+                for xd in xd_list
+            ],
+            "zs": [
+                {
+                    "zg": zs.zg,
+                    "zd": zs.zd,
+                    "gg": zs.gg,
+                    "dd": zs.dd,
+                    "start_date": str(zs.start_time),
+                    "end_date": str(zs.end_time)
+                }
+                for zs in bi_zs_list
+            ],
+            "fx": [
+                {"index": fx.index, "type": fx.type, "price": fx.val,
+                 "date": str(fx.time)}
+                for fx in fx_list
+            ]
+        }
+        return result
+
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+@app.post("/api/astock/analyze")
+async def analyze_astock(request: Request):
+    try:
+        data = await request.json()
+
+        symbol = data.get("symbol")
+        interval = data.get("interval")
+        mode = data.get("mode", "structured")
+        test = data.get("test", False)
+        ai_provider = data.get("ai_provider")
+        ai_model = data.get("ai_model")
+        api_key = data.get("api_key")
+
+        if not symbol or not interval:
+            return JSONResponse(content={"error": "Missing symbol or interval"}, status_code=400)
+
+        from api.astock_analyze_service import analyze_astock_chanlun
+
+        result = analyze_astock_chanlun(
+            symbol, interval,
+            limit=500,
+            test_mode=test,
+            mode=mode,
+            ai_provider=ai_provider,
+            ai_model=ai_model,
+            api_key=api_key
+        )
+
+        return JSONResponse(content=result)
+
+    except Exception as e:
+        import traceback
+        return JSONResponse(content={"error": str(e), "traceback": traceback.format_exc()})
+
+
+# ─── 黄金端点（XAUUSD）────────────────────────────────────────────
+
+@app.get("/api/gold/price")
+async def get_gold_price(source: str = None):
+    """获取黄金实时价格"""
+    try:
+        result = get_realtime_price(preferred_source=source)
+        return result
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+@app.get("/api/gold/kline/{interval}")
+async def get_gold_kline(interval: str, limit: int = 500):
+    """获取黄金历史K线数据"""
+    try:
+        raw_klines = gold_get_klines(interval=interval, limit=limit)
+
+        if not raw_klines or len(raw_klines) < 3:
+            return {"error": "Insufficient gold data"}
+
+        engine_klines = [
+            {
+                "date": k["open_time"],
+                "open": k["open"],
+                "high": k["high"],
+                "low": k["low"],
+                "close": k["close"],
+                "volume": 0.0,
+            }
+            for k in raw_klines
+        ]
+
+        config = EngineConfig()
+        engine_wrapper = ChanlunEngine(config)
+        icl_result = engine_wrapper.analyze_klines(
+            code="XAUUSD",
+            frequency=interval,
+            klines=engine_klines
+        )
+
+        bi_list = icl_result.get_bis()
+        xd_list = icl_result.get_xds()
+        bi_zs_list = icl_result.get_bi_zss()
+        fx_list = icl_result.get_fx_list()
+
+        frontend_bars = gold_convert_to_chanlun_bars(raw_klines)
+
+        result = {
+            "meta": {"symbol": "XAUUSD", "interval": interval, "count": len(frontend_bars), "market": "gold"},
+            "klines": frontend_bars,
+            "bi": [
+                {
+                    "index": bi.index,
+                    "type": bi.type,
+                    "start_price": bi.start_price,
+                    "end_price": bi.end_price,
+                    "start_date": str(bi.start_time),
+                    "end_date": str(bi.end_time),
+                    "buy_sell_point": bi.mmds[0].name if bi.mmds and len(bi.mmds) > 0 else None
+                }
+                for bi in bi_list
+            ],
+            "xd": [
+                {"index": xd.index, "type": xd.type, "start_price": xd.start_price,
+                 "end_price": xd.end_price, "start_date": str(xd.start_time),
+                 "end_date": str(xd.end_time)}
+                for xd in xd_list
+            ],
+            "zs": [
+                {
+                    "zg": zs.zg,
+                    "zd": zs.zd,
+                    "gg": zs.gg,
+                    "dd": zs.dd,
+                    "start_date": str(zs.start_time),
+                    "end_date": str(zs.end_time)
+                }
+                for zs in bi_zs_list
+            ],
+            "fx": [
+                {"index": fx.index, "type": fx.type, "price": fx.val,
+                 "date": str(fx.time)}
+                for fx in fx_list
+            ]
+        }
+        return result
+
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+@app.post("/api/gold/analyze")
+async def analyze_gold(request: Request):
+    try:
+        data = await request.json()
+        symbol = data.get("symbol", "XAUUSD")
+        interval = data.get("interval")
+        mode = data.get("mode", "structured")
+        test = data.get("test", False)
+        ai_provider = data.get("ai_provider")
+        ai_model = data.get("ai_model")
+        api_key = data.get("api_key")
+
+        if not interval:
+            return JSONResponse(content={"error": "Missing interval"}, status_code=400)
+
+        # 模拟 AI 分析结果（开发中）
+        import time
+        result = {
+            "primary_scenario": {
+                "direction": "range",
+                "probability": 0.65,
+                "entry_zone": [2300, 2350],
+                "targets": [2400, 2450],
+                "stop_loss": 2250,
+                "valid_until": int(time.time()) + 86400,
+                "confidence": "medium",
+                "reasoning": "黄金目前处于震荡区间，等待突破方向。"
+            },
+            "alternative_scenarios": [
+                {
+                    "direction": "up",
+                    "probability": 0.25,
+                    "entry_zone": [2350, 2380],
+                    "targets": [2450, 2500],
+                    "stop_loss": 2300,
+                    "valid_until": int(time.time()) + 86400,
+                    "confidence": "low",
+                    "reasoning": "若突破阻力位，可能开启上涨趋势。"
+                },
+                {
+                    "direction": "down",
+                    "probability": 0.10,
+                    "entry_zone": [2280, 2300],
+                    "targets": [2200, 2250],
+                    "stop_loss": 2350,
+                    "valid_until": int(time.time()) + 86400,
+                    "confidence": "low",
+                    "reasoning": "若跌破支撑位，可能继续下行。"
+                }
+            ],
+            "market_context": {
+                "trend": "range",
+                "volatility": "medium",
+                "sentiment": "neutral"
+            },
+            "risk_notes": ["黄金受美元指数影响较大，注意晚间美国数据公布"],
+            "version": "2.0",
+            "output_mode": "scenarios"
+        }
+        return JSONResponse(content=result)
+
+    except Exception as e:
+        import traceback
+        return JSONResponse(content={"error": str(e), "traceback": traceback.format_exc()})
 
 app.mount("/static", StaticFiles(directory=str(web_dir)), name="static")
 

@@ -7,17 +7,58 @@
         <h2>AI 分析</h2>
       </div>
       <div class="header-controls">
-        <!-- 币种选择 -->
-        <select v-model="localSymbol" @change="onSymbolChange" class="control-select">
-          <option value="BTCUSDT">BTC</option>
-          <option value="ETHUSDT">ETH</option>
-        </select>
+        <!-- 币种选择 - 加密货币模式 -->
+        <template v-if="market === 'crypto'">
+          <select v-model="localSymbol" @change="onSymbolChange" class="control-select">
+            <option value="BTCUSDT">BTC</option>
+            <option value="ETHUSDT">ETH</option>
+          </select>
+        </template>
+        <!-- 股票选择 - A 股模式 -->
+        <template v-else-if="market === 'astock'">
+          <select v-model="localSymbol" @change="onSymbolChange" class="control-select astock-select">
+            <option v-for="p in ASTOCK_PRESETS" :key="p.code" :value="p.code">
+              {{ p.name }}
+            </option>
+            <option value="__custom__">自定义代码...</option>
+          </select>
+          <input
+            v-model="customCodeInput"
+            type="text"
+            class="code-input"
+            placeholder="输入代码"
+            maxlength="6"
+            @keyup.enter="applyCustomCode"
+            @input="customCodeInput = customCodeInput.replace(/\D/g, '')"
+          />
+          <button @click="applyCustomCode" class="code-search-btn" title="搜索股票代码">🔍</button>
+        </template>
+        <!-- 黄金选择 - 黄金模式 -->
+        <template v-else-if="market === 'gold'">
+          <select v-model="localSymbol" @change="onSymbolChange" class="control-select">
+            <option v-for="p in GOLD_PRESETS" :key="p.code" :value="p.code">
+              {{ p.name }}
+            </option>
+          </select>
+        </template>
         <!-- 周期选择 -->
         <select v-model="localInterval" @change="onIntervalChange" class="control-select">
-          <option value="15m">15分</option>
-          <option value="1h">1小时</option>
-          <option value="4h">4小时</option>
-          <option value="1d">1天</option>
+          <template v-if="market === 'crypto'">
+            <option value="15m">15分</option>
+            <option value="1h">1小时</option>
+            <option value="4h">4小时</option>
+            <option value="1d">1天</option>
+          </template>
+          <template v-else-if="market === 'astock'">
+            <option v-for="intv in ASTOCK_INTERVALS" :key="intv.value" :value="intv.value">
+              {{ intv.label }}
+            </option>
+          </template>
+          <template v-else-if="market === 'gold'">
+            <option v-for="intv in GOLD_INTERVALS" :key="intv.value" :value="intv.value">
+              {{ intv.label }}
+            </option>
+          </template>
         </select>
         <!-- 模式选择 -->
         <select v-model="localMode" @change="onModeChange" class="control-select mode-select">
@@ -258,6 +299,7 @@
 import { ref, watch, computed, onUnmounted } from 'vue';
 import type { AIAnalysisResult, AITableResult, AIStructuredResult } from '@/types/chanlun';
 import StateMachineCard from './StateMachineCard.vue';
+import { ASTOCK_PRESETS, ASTOCK_INTERVALS, GOLD_PRESETS, GOLD_INTERVALS, type MarketType } from '@/api/client';
 
 const props = defineProps<{
   symbol?: string;
@@ -265,10 +307,11 @@ const props = defineProps<{
   result?: AIAnalysisResult | null;
   analyzing?: boolean;
   mode?: 'structured' | 'table';
-  // 新增：AI 配置
   aiProvider?: string;
   aiModel?: string;
   apiKey?: string;
+  market?: MarketType;
+  displayName?: string;
 }>();
 
 const emit = defineEmits<{
@@ -292,6 +335,7 @@ const localProvider = ref(props.aiProvider || 'siliconflow');
 const localModel = ref(props.aiModel || 'Pro/deepseek-ai/DeepSeek-V3.2');
 const localApiKey = ref(props.apiKey || '');
 const showApiKeyInput = ref(false);
+const customCodeInput = ref('');
 
 // Provider 选项配置
 const providerOptions = [
@@ -541,7 +585,17 @@ watch(() => props.mode, (newVal) => {
 });
 
 function onSymbolChange() {
+  if (localSymbol.value === '__custom__') {
+    localSymbol.value = customCodeInput.value.padStart(6, '0') || '000001';
+  }
   emit('update:symbol', localSymbol.value);
+}
+
+function applyCustomCode() {
+  const code = customCodeInput.value.replace(/\D/g, '').padStart(6, '0');
+  if (code.length !== 6) return;
+  localSymbol.value = code;
+  emit('update:symbol', code);
 }
 
 function onIntervalChange() {
@@ -909,6 +963,52 @@ function getPrimaryTrigger(): string {
 
 .control-select.mode-select {
   background: #FFE0B2;
+}
+
+.control-select.astock-select {
+  max-width: 110px;
+  flex-shrink: 1;
+}
+
+.code-input {
+  width: 70px;
+  padding: 5px 6px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: 'Patrick Hand', 'Caveat', cursive;
+  color: #131722;
+  background: #FFFFFF;
+  border: 2px solid #2C2C2C;
+  border-radius: 5px 2px 4px 3px / 3px 4px 2px 5px;
+  outline: none;
+  flex-shrink: 0;
+}
+
+.code-input::placeholder {
+  color: #BCAAA4;
+  font-size: 12px;
+}
+
+.code-input:focus {
+  border-color: #2962FF;
+  box-shadow: 0 0 0 1px rgba(41, 98, 255, 0.2);
+}
+
+.code-search-btn {
+  padding: 5px 8px;
+  font-size: 14px;
+  background: #E8F4FD;
+  border: 2px solid #2C2C2C;
+  border-radius: 5px 2px 4px 3px / 3px 4px 2px 5px;
+  cursor: pointer;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+
+.code-search-btn:hover {
+  background: #FFE0B2;
+  transform: translate(-1px, -1px);
+  box-shadow: 2px 2px 0 #2C2C2C;
 }
 
 /* 操作按钮区 */
