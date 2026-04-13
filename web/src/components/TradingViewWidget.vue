@@ -11,6 +11,37 @@
       <div class="loading-spinner"></div>
       <p>加载中...</p>
     </div>
+    <!-- 缠论图层控制 -->
+    <div class="chanlun-controls">
+      <button 
+        @click="toggleLayer('bi')" 
+        class="layer-btn" 
+        :class="{ active: showBi }"
+        title="显示/隐藏笔">
+        📈 笔
+      </button>
+      <button 
+        @click="toggleLayer('xd')" 
+        class="layer-btn" 
+        :class="{ active: showXd }"
+        title="显示/隐藏线段">
+        📊 线段
+      </button>
+      <button 
+        @click="toggleLayer('zs')" 
+        class="layer-btn" 
+        :class="{ active: showZs }"
+        title="显示/隐藏中枢">
+        🎯 中枢
+      </button>
+      <button 
+        @click="toggleLayer('fx')" 
+        class="layer-btn" 
+        :class="{ active: showFx }"
+        title="显示/隐藏买卖点">
+        💰 买卖点
+      </button>
+    </div>
   </div>
 </template>
 
@@ -31,6 +62,24 @@ const props = withDefaults(defineProps<Props>(), {
 const chartContainer = ref<HTMLDivElement>()
 const loading = ref(true)
 let chart: echarts.ECharts | null = null
+
+// 缠论图层显示控制
+const showBi = ref(true)
+const showXd = ref(true)
+const showZs = ref(true)
+const showFx = ref(true)
+
+// 切换图层显示
+const toggleLayer = (layer: 'bi' | 'xd' | 'zs' | 'fx') => {
+  switch (layer) {
+    case 'bi': showBi.value = !showBi.value; break
+    case 'xd': showXd.value = !showXd.value; break
+    case 'zs': showZs.value = !showZs.value; break
+    case 'fx': showFx.value = !showFx.value; break
+  }
+  // 重新渲染图表
+  initChart()
+}
 
 const fetchKlines = async () => {
   loading.value = true
@@ -155,7 +204,7 @@ const initChart = async () => {
   
   // 笔
   const biMarkLines: any[] = []
-  if (data.bi && Array.isArray(data.bi) && data.bi.length > 0) {
+  if (showBi.value && data.bi && Array.isArray(data.bi) && data.bi.length > 0) {
     const sortedBi = [...data.bi].sort((a, b) => a.index - b.index)
     for (let i = 0; i < sortedBi.length; i++) {
       const bi = sortedBi[i]
@@ -186,7 +235,7 @@ const initChart = async () => {
 
   // 线段
   const xdMarkLines: any[] = []
-  if (data.xd && Array.isArray(data.xd) && data.xd.length > 0) {
+  if (showXd.value && data.xd && Array.isArray(data.xd) && data.xd.length > 0) {
     const sortedXd = [...data.xd].sort((a, b) => a.index - b.index)
     for (let i = 0; i < sortedXd.length; i++) {
       const xd = sortedXd[i]
@@ -217,7 +266,7 @@ const initChart = async () => {
 
   // 中枢
   const zsRectangles: any[] = []
-  if (data.zs && Array.isArray(data.zs)) {
+  if (showZs.value && data.zs && Array.isArray(data.zs)) {
     data.zs.forEach((zs: any) => {
       const startIndex = findDateIndex(zs.start_date)
       const endIndex = findDateIndex(zs.end_date)
@@ -228,6 +277,34 @@ const initChart = async () => {
           { coord: [startIndex, rangeLow] },
           { coord: [endIndex, rangeHigh] }
         ])
+      }
+    })
+  }
+
+  // 买卖点（分型）
+  const fxMarkPoints: any[] = []
+  if (showFx.value && data.fx && Array.isArray(data.fx)) {
+    data.fx.forEach((fx: any) => {
+      const idx = findDateIndex(fx.date)
+      if (idx >= 0) {
+        fxMarkPoints.push({
+          name: fx.type === 'di' ? '买点' : '卖点',
+          coord: [idx, fx.price],
+          symbol: fx.type === 'di' ? 'triangle' : 'triangle',
+          symbolSize: 12,
+          symbolRotate: fx.type === 'di' ? 0 : 180,
+          itemStyle: {
+            color: fx.type === 'di' ? '#4CAF50' : '#F44336'
+          },
+          label: {
+            show: true,
+            position: fx.type === 'di' ? 'bottom' : 'top',
+            formatter: fx.type === 'di' ? '买' : '卖',
+            color: fx.type === 'di' ? '#4CAF50' : '#F44336',
+            fontSize: 10,
+            fontWeight: 'bold'
+          }
+        })
       }
     })
   }
@@ -349,6 +426,15 @@ const initChart = async () => {
           symbolSize: 6,
           lineStyle: { type: 'solid', width: 2 },
           data: biMarkLines
+        },
+        markPoint: {
+          data: fxMarkPoints,
+          symbolSize: 12,
+          label: {
+            show: true,
+            fontSize: 10,
+            fontWeight: 'bold'
+          }
         }
       },
       // 线段
@@ -534,6 +620,42 @@ watch([() => props.symbol, () => props.interval, () => props.market], () => {
   p {
     margin-top: 12px;
     color: #666;
+  }
+}
+
+.chanlun-controls {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: #f8f9fa;
+  border-top: 1px solid #e0e0e0;
+  flex-wrap: wrap;
+
+  .layer-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    background: #fff;
+    color: #666;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+
+    &:hover {
+      background: #f0f0f0;
+      border-color: #ccc;
+    }
+
+    &.active {
+      background: #4A90D9;
+      color: white;
+      border-color: #4A90D9;
+    }
   }
 }
 
