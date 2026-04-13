@@ -242,7 +242,7 @@ const initChart = async () => {
       axisPointer: { type: 'cross' }
     },
     legend: {
-      data: ['K线', '成交量', 'MACD', '笔', '线段'],
+      data: ['K线', 'MACD'],
       bottom: 10
     },
     // 三个grid: K线区域、MACD区域、(无成交量单独区域)
