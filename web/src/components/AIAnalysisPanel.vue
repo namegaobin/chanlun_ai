@@ -3,8 +3,15 @@
     <!-- 面板头部 -->
     <div class="panel-header doodle-header">
       <div class="header-left">
-        <span class="header-icon">📊</span>
-        <h2>AI 分析</h2>
+        <!-- 操作按钮 -->
+        <button @click="$emit('analyze')" :disabled="analyzing" class="analyze-btn doodle-btn">
+          <span class="btn-icon">🔍</span>
+          {{ analyzing ? '分析中...' : '开始分析' }}
+        </button>
+        <button @click="$emit('show-history')" class="history-btn doodle-btn-secondary">
+          <span class="btn-icon">📜</span>
+          记录
+        </button>
       </div>
       <div class="header-controls">
         <!-- 币种选择 - 加密货币模式 -->
@@ -76,18 +83,6 @@
           {{ localApiKey ? '🔑' : '➕🔑' }}
         </button>
       </div>
-    </div>
-
-    <!-- 操作按钮区 -->
-    <div class="panel-actions">
-      <button @click="$emit('analyze')" :disabled="analyzing" class="analyze-btn doodle-btn" style="font-family: 'Patrick Hand', 'Caveat', cursive; font-weight: 700;">
-        <span class="btn-icon">🔍</span>
-        {{ analyzing ? '分析中...' : '开始分析' }}
-      </button>
-      <button @click="$emit('show-history')" class="history-btn doodle-btn-secondary" style="font-family: 'Patrick Hand', 'Caveat', cursive; font-weight: 700;">
-        <span class="btn-icon">📜</span>
-        记录
-      </button>
     </div>
 
     <!-- 内容区 -->
@@ -1022,10 +1017,10 @@ function getPrimaryTrigger(): string {
 .doodle-btn {
   font-family: 'Patrick Hand', 'Caveat', cursive !important;
   font-size: 16px;
-  padding: 8px 16px;
+  padding: 5px 8px;
   background: #FFE0B2;
   border: 2px solid #2C2C2C;
-  border-radius: 6px 2px 5px 3px / 3px 5px 2px 6px;
+  border-radius: 5px 2px 4px 3px / 3px 5px 2px 6px;
   color: #2C2C2C;
   cursor: pointer;
   transition: all 0.15s;
@@ -1039,9 +1034,15 @@ function getPrimaryTrigger(): string {
 .doodle-btn-secondary {
   font-family: 'Patrick Hand', 'Caveat', cursive !important;
   font-size: 16px;
+  padding: 5px 8px;
   background: #FFFFFF;
-  min-width: 100px;
-  justify-content: center;
+  border: 2px solid #2C2C2C;
+  border-radius: 5px 2px 4px 3px / 3px 4px 2px 5px;
+  box-shadow: 2px 2px 0 #2C2C2C;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .doodle-btn:hover:not(:disabled) {
