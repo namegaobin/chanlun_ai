@@ -2,7 +2,7 @@
   <div class="app-container">
     <!-- 顶部标题栏 -->
     <header class="app-header">
-      <h1>缠论 AI 分析</h1>
+      <h1>AI 分析</h1>
       <!-- 市场切换 -->
       <div class="market-switch">
         <button
@@ -103,7 +103,7 @@ import { analyzeAI, analyzeAstockAI, analyzeGoldAI, ASTOCK_PRESETS, GOLD_PRESETS
 
 import type { AIAnalysisResult } from '@/types/chanlun';
 
-const market = ref<MarketType>('crypto');
+const market = ref<MarketType>('astock');
 const symbol = ref('BTCUSDT');
 const interval = ref('1h');
 const analysisMode = ref<'structured' | 'table'>('structured');
