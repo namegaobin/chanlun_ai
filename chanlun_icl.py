@@ -16,8 +16,8 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-# 使用项目自己定义的 ChanlunEngine（在 chanlun_local/engine.py 中）
-from chanlun_local.engine import ChanlunEngine, EngineConfig
+# 使用项目自己定义的 ChanlunEngine（在 chanlun_local/engine_new.py 中）
+from chanlun_local.engine_new import ChanlunEngine, EngineConfig
 
 
 class ICL:

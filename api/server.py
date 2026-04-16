@@ -19,7 +19,7 @@ import asyncio
 # Import project modules
 from binance import get_klines
 from chanlun_adapter import convert_to_chanlun_bars
-from chanlun_local.engine import ChanlunEngine, EngineConfig
+from chanlun_local.engine_new import ChanlunEngine, EngineConfig
 from astock import get_klines as astock_get_klines
 from astock_adapter import convert_to_chanlun_bars as astock_convert_to_chanlun_bars
 from gold import get_klines as gold_get_klines

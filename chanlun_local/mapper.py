@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List
 
-from .engine import KlineInput
+from .engine_bak import KlineInput
 
 def _format_datetime(dt: Any) -> str:
     """将 datetime 或可转为字符串的时间值格式化为字符串
