@@ -27,7 +27,13 @@
     <main class="main-content">
       <!-- 左侧：TradingView 图表 -->
       <section class="chart-section">
-        <TradingViewWidget :symbol="symbol" :interval="interval" :market="market" />
+        <TradingViewWidget
+          :symbol="symbol"
+          :interval="interval"
+          :market="market"
+          :drill-enabled="true"
+          @drill-down="onDrillDown"
+        />
       </section>
 
       <!-- 右侧：AI 分析面板 -->
@@ -92,6 +98,22 @@
         </div>
       </Transition>
     </Teleport>
+
+    <!-- 区间套钻取面板 -->
+    <DrillDownPanel
+      v-if="showDrillPanel"
+      :visible="showDrillPanel"
+      :level="currentDrillLevel!"
+      :depth="drillStack.length"
+      :breadcrumbs="drillBreadcrumbs"
+      :drillStack="drillStack"
+      :parentChartData="drillParentChartData"
+      @close="closeDrill"
+      @jump-to="jumpDrillTo"
+      @drill-deeper="drillDeeper"
+      @ai-analyze="onDrillAIAnalyze"
+      @data-loaded="(id: string, data: ChanlunData) => drillDataCache.set(id, data)"
+    />
   </div>
 </template>
 
@@ -99,9 +121,11 @@
 import { ref, onMounted, watch, computed } from 'vue';
 import TradingViewWidget from '@/components/TradingViewWidget.vue';
 import AIAnalysisPanel from '@/components/AIAnalysisPanel.vue';
+import DrillDownPanel from '@/components/DrillDownPanel.vue';
 import { analyzeAI, analyzeAstockAI, analyzeGoldAI, ASTOCK_PRESETS, GOLD_PRESETS, type MarketType } from '@/api/client';
 
-import type { AIAnalysisResult } from '@/types/chanlun';
+import type { AIAnalysisResult, DrillLevel, DrillMarketType, ChanlunData } from '@/types/chanlun';
+import { getNextInterval, generateDrillId, getIntervalLabel, getSegmentLabel } from '@/utils/drilldown';
 
 const market = ref<MarketType>('astock');
 const symbol = ref('BTCUSDT');
@@ -113,11 +137,158 @@ const showHistory = ref(false);
 
 // AI 配置状态
 const aiProvider = ref('deepseek');
-const aiModel = ref('deepseek-reasoner');
+const aiModel = ref('glm-5');
 const apiKey = ref('');
 
+// ─── 区间套钻取状态 ─────────────────────────────────────────
+const drillStack = ref<DrillLevel[]>([]);
+const showDrillPanel = computed(() => drillStack.value.length > 0);
+const currentDrillLevel = computed(() => drillStack.value[drillStack.value.length - 1] || null);
+
+const drillBreadcrumbs = computed(() => {
+  return drillStack.value.map((level) => ({
+    interval: getIntervalLabel(level.interval),
+    label: getSegmentLabel(level.segmentType, level.segmentIndex),
+  }));
+});
+
+function onDrillDown(payload: {
+  segmentType: 'bi' | 'xd';
+  segmentIndex: number;
+  startDate: string;
+  endDate: string;
+  startPrice: number;
+  endPrice: number;
+}) {
+  const nextInterval = getNextInterval(interval.value, market.value as DrillMarketType);
+  if (!nextInterval) {
+    console.warn('[区间套] 已达最小周期，无法继续钻取。当前周期:', interval.value);
+    return;
+  }
+
+  const newLevel: DrillLevel = {
+    id: generateDrillId(),
+    symbol: symbol.value,
+    interval: nextInterval,
+    market: market.value as DrillMarketType,
+    segmentType: payload.segmentType,
+    segmentIndex: payload.segmentIndex,
+    startDate: payload.startDate,
+    endDate: payload.endDate,
+    startPrice: payload.startPrice,
+    endPrice: payload.endPrice,
+    parentInterval: interval.value,
+  };
+  drillStack.value.push(newLevel);
+}
+
+function drillDeeper(payload: {
+  segmentType: 'bi' | 'xd';
+  segmentIndex: number;
+  startDate: string;
+  endDate: string;
+  startPrice: number;
+  endPrice: number;
+}) {
+  if (!currentDrillLevel.value) return;
+  const nextInterval = getNextInterval(currentDrillLevel.value.interval, currentDrillLevel.value.market);
+  if (!nextInterval) return;
+
+  const newLevel: DrillLevel = {
+    id: generateDrillId(),
+    symbol: currentDrillLevel.value.symbol,
+    interval: nextInterval,
+    market: currentDrillLevel.value.market,
+    segmentType: payload.segmentType,
+    segmentIndex: payload.segmentIndex,
+    startDate: payload.startDate,
+    endDate: payload.endDate,
+    startPrice: payload.startPrice,
+    endPrice: payload.endPrice,
+    parentInterval: currentDrillLevel.value.interval,
+  };
+  drillStack.value.push(newLevel);
+}
+
+function jumpDrillTo(index: number) {
+  // Truncate stack to the clicked level (keep items 0..index)
+  if (index < drillStack.value.length - 1) {
+    drillStack.value = drillStack.value.slice(0, index + 1);
+  }
+}
+
+function closeDrill() {
+  drillStack.value = [];
+  drillDataCache.clear();
+}
+
+// 区间套各级图表数据缓存（用于 AI 分析时提取父级缠论结构）
+const drillDataCache = new Map<string, ChanlunData>();
+
+// 计算当前钻取面板的父级图表数据
+const drillParentChartData = computed(() => {
+  if (drillStack.value.length < 2) return null;
+  const parentLevel = drillStack.value[drillStack.value.length - 2];
+  return drillDataCache.get(`${parentLevel.id}`) || null;
+});
+
+// 区间套 AI 分析：从钻取面板触发
+async function onDrillAIAnalyze(payload: {
+  symbol: string;
+  interval: string;
+  market: string;
+  drillContext: any;
+}) {
+  analyzing.value = true;
+  try {
+    let result: AIAnalysisResult;
+    if (payload.market === 'astock') {
+      result = await analyzeAstockAI(
+        payload.symbol, payload.interval,
+        analysisMode.value, false,
+        aiProvider.value, aiModel.value, apiKey.value,
+        payload.drillContext
+      );
+    } else if (payload.market === 'gold') {
+      result = await analyzeGoldAI(
+        payload.symbol, payload.interval,
+        analysisMode.value, false,
+        aiProvider.value, aiModel.value, apiKey.value,
+        payload.drillContext
+      );
+    } else {
+      result = await analyzeAI(
+        payload.symbol, payload.interval,
+        analysisMode.value, false,
+        aiProvider.value, aiModel.value, apiKey.value,
+        payload.drillContext
+      );
+    }
+    aiResult.value = result;
+
+    analysisHistory.value.unshift({
+      symbol: payload.symbol,
+      interval: payload.interval,
+      intervalDisplay: intervalDisplay(payload.interval),
+      time: new Date().toLocaleString('zh-CN', {
+        month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
+      }),
+      result: result
+    });
+    if (analysisHistory.value.length > 20) {
+      analysisHistory.value = analysisHistory.value.slice(0, 20);
+    }
+  } catch (error: any) {
+    console.error('Drill AI analysis failed:', error);
+    const errorMsg = error.response?.data?.error || error.message || 'AI analysis failed';
+    alert(errorMsg);
+  } finally {
+    analyzing.value = false;
+  }
+}
+
 // 市场切换时的默认值
-const cryptoDefaults = { symbol: 'BTCUSDT', interval: '1h' };
+const cryptoDefaults = { symbol: 'BTCUSDT', interval: '15m' };
 const astockDefaults = { symbol: '000001', interval: '1d' };
 const goldDefaults = { symbol: 'XAUUSD', interval: '1h' };
 
@@ -158,6 +329,7 @@ const analysisHistory = ref<HistoryRecord[]>([]);
 
 function intervalDisplay(int: string): string {
   const map: Record<string, string> = {
+    '5m': '5分',
     '15m': '15分',
     '1h': '1小时',
     '4h': '4小时',

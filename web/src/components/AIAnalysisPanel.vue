@@ -51,10 +51,9 @@
         <!-- 周期选择 -->
         <select v-model="localInterval" @change="onIntervalChange" class="control-select">
           <template v-if="market === 'crypto'">
+            <option value="5m">5分</option>
             <option value="15m">15分</option>
             <option value="1h">1小时</option>
-            <option value="4h">4小时</option>
-            <option value="1d">1天</option>
           </template>
           <template v-else-if="market === 'astock'">
             <option v-for="intv in ASTOCK_INTERVALS" :key="intv.value" :value="intv.value">
@@ -120,6 +119,9 @@
           <h4>状态机策略</h4>
           <StateMachineCard :data="(result as AIStructuredResult).state_machine!" />
         </div>
+
+        <!-- 多级别区间套分析 -->
+        <MultiLevelAnalysisPanel :multiLevelData="getMultiLevelData()" />
 
         <!-- 结构判断 -->
         <div class="result-section">
@@ -294,6 +296,7 @@
 import { ref, watch, computed, onUnmounted } from 'vue';
 import type { AIAnalysisResult, AITableResult, AIStructuredResult } from '@/types/chanlun';
 import StateMachineCard from './StateMachineCard.vue';
+import MultiLevelAnalysisPanel from './MultiLevelAnalysisPanel.vue';
 import { ASTOCK_PRESETS, ASTOCK_INTERVALS, GOLD_PRESETS, GOLD_INTERVALS, type MarketType } from '@/api/client';
 
 const props = defineProps<{
@@ -518,6 +521,14 @@ function isStructuredResult(result: AIAnalysisResult | null | undefined): result
 const hasStateMachine = computed(() => {
   return isStructuredResult(props.result) && props.result.state_machine;
 });
+
+// 获取多级别分析数据
+function getMultiLevelData() {
+  if (isStructuredResult(props.result) && props.result.multi_level) {
+    return props.result.multi_level;
+  }
+  return undefined;
+}
 
 // 获取 Markdown 内容（用于 table 模式）
 const markdownContent = computed(() => {

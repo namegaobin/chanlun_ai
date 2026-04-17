@@ -53,30 +53,26 @@ class ChanlunAIExporter:
         # 3. bi - 笔（取最后 15 条）
         bi = self._build_bi(icl=icl, max_count=15)
         
-        # 4. segment - 线段（取最后 5 条）
-        segment = self._build_segment(icl=icl, max_count=5)
-        
-        # 5. center - 中枢
+        # 4. center - 笔中枢（不含线段中枢）
         center = self._build_center(icl=icl)
         
-        # 6. signal - 买卖点/背驰汇总
+        # 5. signal - 买卖点/背驰汇总（仅笔级别）
         signal = self._build_signal(icl=icl)
         
-        # 7. context - AI 提示上下文
+        # 6. context - AI 提示上下文
         context = {
             "analysis_goal": "predict_next_move",
             "market_type": "crypto",
             "allowed_strategy": ["trend_follow", "range_trade"],
         }
         
-        # 8. structure_summary - 结构摘要（新增）
+        # 7. structure_summary - 结构摘要（新增）
         structure_summary = self._build_structure_summary(icl=icl, latest_price=latest_price)
         
         return {
             "meta": meta,
             "market": market,
             "bi": bi,
-            "segment": segment,
             "center": center,
             "signal": signal,
             "context": context,
@@ -137,13 +133,10 @@ class ChanlunAIExporter:
         """构造 meta 块"""
         
         bis = icl.get_bis() if hasattr(icl, 'get_bis') else []
-        xds = icl.get_xds() if hasattr(icl, 'get_xds') else []
         
         center_count = 0
         if hasattr(icl, 'get_bi_zss'):
             center_count += len(icl.get_bi_zss(None) or [])
-        if hasattr(icl, 'get_xd_zss'):
-            center_count += len(icl.get_xd_zss(None) or [])
         
         return {
             "symbol": symbol,
@@ -154,7 +147,6 @@ class ChanlunAIExporter:
             "data_size": {
                 "kline": kline_count,
                 "bi": len(bis),
-                "segment": len(xds),
                 "center": center_count,
             },
         }
@@ -220,44 +212,6 @@ class ChanlunAIExporter:
         
         return result
     
-    def _build_segment(self, icl: Any, max_count: int = 5) -> List[Dict[str, Any]]:
-        """构造 segment 块（线段）"""
-        
-        if not hasattr(icl, 'get_xds'):
-            return []
-        
-        xds = icl.get_xds() or []
-        recent_xds = xds[-max_count:] if len(xds) > max_count else xds
-        
-        result = []
-        for xd in recent_xds:
-            xd_dict = {
-                "index": getattr(xd, 'index', 0),
-                "direction": getattr(xd, 'type', 'unknown'),
-                "is_done": True,
-            }
-            
-            # 时间和价格
-            if hasattr(xd, 'start_time'):
-                start_time = getattr(xd, 'start_time')
-                xd_dict["start_time"] = start_time.isoformat() if hasattr(start_time, 'isoformat') else str(start_time)
-            if hasattr(xd, 'end_time'):
-                end_time = getattr(xd, 'end_time')
-                xd_dict["end_time"] = end_time.isoformat() if hasattr(end_time, 'isoformat') else str(end_time)
-            if hasattr(xd, 'start_price'):
-                xd_dict["start_price"] = float(getattr(xd, 'start_price'))
-            if hasattr(xd, 'end_price'):
-                xd_dict["end_price"] = float(getattr(xd, 'end_price'))
-            
-            # 背驰
-            bcs = getattr(xd, 'bcs', []) or []
-            divergence_types = [getattr(bc, 'type', '') for bc in bcs if getattr(bc, 'bc', False)]
-            xd_dict["divergence"] = divergence_types[0] if divergence_types else None
-            
-            result.append(xd_dict)
-        
-        return result
-    
     def _build_center(self, icl: Any) -> List[Dict[str, Any]]:
         """构造 center 块（中枢）"""
         
@@ -304,44 +258,6 @@ class ChanlunAIExporter:
                 
                 result.append(zs_dict)
         
-        # 线段中枢
-        if hasattr(icl, 'get_xd_zss'):
-            xd_zss = icl.get_xd_zss(None) or []
-            for zs in xd_zss:
-                zs_dict = {
-                    "index": getattr(zs, 'index', 0),
-                    "type": "segment",
-                    "zs_type": getattr(zs, 'zs_type', 'standard'),
-                }
-                
-                if hasattr(zs, 'start_time'):
-                    start_time = getattr(zs, 'start_time')
-                    zs_dict["start_time"] = start_time.isoformat() if hasattr(start_time, 'isoformat') else str(start_time)
-                if hasattr(zs, 'end_time'):
-                    end_time = getattr(zs, 'end_time')
-                    zs_dict["end_time"] = end_time.isoformat() if hasattr(end_time, 'isoformat') else str(end_time)
-                
-                # 中枢核心价格区间
-                if hasattr(zs, 'zg'):
-                    zs_dict["zg"] = float(getattr(zs, 'zg'))
-                if hasattr(zs, 'zd'):
-                    zs_dict["zd"] = float(getattr(zs, 'zd'))
-                if hasattr(zs, 'gg'):
-                    zs_dict["gg"] = float(getattr(zs, 'gg'))
-                if hasattr(zs, 'dd'):
-                    zs_dict["dd"] = float(getattr(zs, 'dd'))
-                
-                if hasattr(zs, 'high'):
-                    zs_dict["high"] = float(getattr(zs, 'high'))
-                if hasattr(zs, 'low'):
-                    zs_dict["low"] = float(getattr(zs, 'low'))
-                if hasattr(zs, 'level'):
-                    zs_dict["level"] = int(getattr(zs, 'level'))
-                if hasattr(zs, 'relation'):
-                    zs_dict["relation"] = str(getattr(zs, 'relation'))
-                
-                result.append(zs_dict)
-        
         return result
     
     def _build_signal(self, icl: Any) -> Dict[str, Any]:
@@ -378,23 +294,6 @@ class ChanlunAIExporter:
                         if bc_type:
                             divergences.append(bc_type)
         
-        # 从线段中收集
-        if hasattr(icl, 'get_xds'):
-            xds = icl.get_xds() or []
-            for xd in xds:
-                mmds = getattr(xd, 'mmds', []) or []
-                for mmd in mmds:
-                    name = getattr(mmd, 'name', None)
-                    if name:
-                        buy_sell_points.append(name)
-                
-                bcs = getattr(xd, 'bcs', []) or []
-                for bc in bcs:
-                    if getattr(bc, 'bc', False):
-                        bc_type = getattr(bc, 'type', '')
-                        if bc_type:
-                            divergences.append(bc_type)
-        
         return {
             "buy_sell_points": sorted(set(buy_sell_points)),
             "divergences": sorted(set(divergences)),
@@ -411,7 +310,6 @@ class ChanlunAIExporter:
         """
         
         bis = icl.get_bis() if hasattr(icl, 'get_bis') else []
-        xds = icl.get_xds() if hasattr(icl, 'get_xds') else []
         bi_zss = icl.get_bi_zss() if hasattr(icl, 'get_bi_zss') else []
         
         summary = {

@@ -246,7 +246,7 @@ def call_ai(
             api_key=api_key,
             temperature=temperature,
             max_tokens=max_tokens,
-            timeout=180.0,  # DeepSeek 需要更长超时时间（3分钟），因为模型推理较慢
+            timeout=300.0,  # DeepSeek 需要更长超时时间（5分钟），reasoner 模型推理较慢
         )
         client = LLMClient(cfg)
         return client.generate(prompt)

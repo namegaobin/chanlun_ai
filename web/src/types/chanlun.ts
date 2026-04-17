@@ -108,42 +108,6 @@ export interface StructureJudgment {
   };
 }
 
-export interface AIStructuredResult {
-  mode?: 'structured';
-  meta: {
-    symbol: string;
-    interval: string;
-    price: number;
-    timestamp?: string;
-  };
-  structure_judgement?: StructureJudgment;
-  signals?: {
-    buy_sell_points?: string[];
-    divergences?: string[];
-    bi?: string;
-    direction?: string;
-  };
-  primary_scenario?: {
-    direction: 'up' | 'down' | 'range';
-    target_pct: number;
-    stop_pct: number;
-    probability: number;
-    trigger?: string;
-    reasoning?: string;
-  };
-  scenarios: ScenarioData[];
-  analysis?: string;
-  risk_notes?: string[];
-  structure?: string;
-  position?: string;
-  pivot?: [number, number];
-
-  // v2.0 新增：状态机数据
-  state_machine?: StateMachineData;
-  version?: string;
-  output_mode?: 'scenarios' | 'state_machine';
-}
-
 // AI 分析结果类型 - 联合类型
 export type AIAnalysisResult = AIStructuredResult | AITableResult;
 
@@ -200,3 +164,153 @@ export interface StateMachineData {
 export interface ScenarioDataExtended extends ScenarioData {
   entry_range?: [number, number];
 }
+
+// ─── 多级别区间套分析类型 ─────────────────────────────────────────────
+
+export interface MultiLevelBiData {
+  index: number;
+  type: 'up' | 'down';
+  start_price: number;
+  end_price: number;
+  start_time: string;
+  end_time: string;
+  strength: number;
+  is_done: boolean;
+  mmds: string[];
+  bcs: string[];
+}
+
+export interface MultiLevelXdData {
+  index: number;
+  type: 'up' | 'down';
+  start_price: number;
+  end_price: number;
+  start_time: string;
+  end_time: string;
+  strength: number;
+  bis_count: number;
+  is_done: boolean;
+  mmds: string[];
+  bcs: string[];
+}
+
+export interface MultiLevelZsData {
+  index: number;
+  type: string;
+  direction: string;
+  zg: number;
+  zd: number;
+  gg: number;
+  dd: number;
+  start_time: string;
+  end_time: string;
+  bi_count: number;
+  relation: string;
+}
+
+export interface MultiLevelAnalysisItem {
+  interval: string;
+  klines_count: number;
+  bis_count: number;
+  xds_count: number;
+  bi_zss_count: number;
+  xd_zss_count: number;
+  latest_price: number;
+  bis: MultiLevelBiData[];
+  xds: MultiLevelXdData[];
+  bi_zss: MultiLevelZsData[];
+  xd_zss: MultiLevelZsData[];
+  error?: string;
+}
+
+export interface MultiLevelAnalysisData {
+  symbol: string;
+  base_interval: string;
+  analyzed_levels: string[];
+  levels: Record<string, MultiLevelAnalysisItem>;
+  analysis_summary: {
+    total_levels: number;
+    levels_info: Record<string, {
+      status: 'success' | 'error';
+      bis_count?: number;
+      xds_count?: number;
+      bi_zss_count?: number;
+      xd_zss_count?: number;
+      latest_price?: number;
+      error?: string;
+    }>;
+    trend_alignment?: string;
+    key_structures?: Array<{
+      level: string;
+      type: string;
+      zg: number;
+      zd: number;
+      direction: string;
+    }>;
+  };
+}
+
+// AI 分析结果类型 - 结构化模式（JSON）
+// v3.0 新增 multi_level 多级别区间套分析字段
+export interface AIStructuredResult {
+  mode?: 'structured';
+  meta: {
+    symbol: string;
+    interval: string;
+    price: number;
+    timestamp?: string;
+  };
+  structure_judgement?: StructureJudgment;
+  signals?: {
+    buy_sell_points?: string[];
+    divergences?: string[];
+    bi?: string;
+    direction?: string;
+  };
+  primary_scenario?: {
+    direction: 'up' | 'down' | 'range';
+    target_pct: number;
+    stop_pct: number;
+    probability: number;
+    trigger?: string;
+    reasoning?: string;
+  };
+  scenarios: ScenarioData[];
+  analysis?: string;
+  risk_notes?: string[];
+  structure?: string;
+  position?: string;
+  pivot?: [number, number];
+
+  // v2.0 新增：状态机数据
+  state_machine?: StateMachineData;
+  version?: string;
+  output_mode?: 'scenarios' | 'state_machine';
+
+  // v3.0 新增：多级别区间套分析数据
+  multi_level?: MultiLevelAnalysisData;
+}
+
+// ─── 区间套钻取类型 ─────────────────────────────────────────────
+
+export type DrillMarketType = 'crypto' | 'astock' | 'gold';
+
+export interface DrillLevel {
+  id: string;
+  symbol: string;
+  interval: string;
+  market: DrillMarketType;
+  segmentType: 'bi' | 'xd';
+  segmentIndex: number;
+  startDate: string;
+  endDate: string;
+  startPrice: number;
+  endPrice: number;
+  parentInterval: string;
+}
+
+export const INTERVAL_HIERARCHY: Record<string, string[]> = {
+  crypto: ['1M', '1w', '1d', '4h', '1h', '15m', '5m', '1m'],
+  astock: ['1M', '1w', '1d', '4h', '1h', '60m', '15m', '5m'],
+  gold:   ['1w', '1d', '4h', '1h', '15m', '5m'],
+};

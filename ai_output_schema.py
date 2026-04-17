@@ -77,10 +77,6 @@ AI_OUTPUT_SCHEMA = {
             "is_done": "boolean",
             "strength_vs_prev": "string"  # weakening / strengthening / similar
         },
-        "latest_xd": {
-            "direction": "string",
-            "is_done": "boolean"
-        },
         "zs": {
             "level": "number",
             "zg": "number",  # 中枢高点
@@ -211,10 +207,6 @@ def get_schema_template() -> str:
       "direction": "string (up / down)",
       "is_done": "boolean",
       "strength_vs_prev": "string (weakening / strengthening / similar，与同向前笔力度对比)"
-    },
-    "latest_xd": {
-      "direction": "string (up / down)",
-      "is_done": "boolean"
     },
     "zs": {
       "level": "number (中枢级别)",

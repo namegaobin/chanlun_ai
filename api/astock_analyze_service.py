@@ -35,6 +35,7 @@ def analyze_astock_chanlun(
     ai_provider: str = None,
     ai_model: str = None,
     api_key: str = None,
+    drill_context: dict = None,
 ):
     """执行 A 股缠论 AI 分析
 
@@ -92,6 +93,49 @@ def analyze_astock_chanlun(
         )
 
         latest_price = klines[-1]["close"]
+
+        # 4.5 区间套多级别分析：自动获取并计算父级缠论结构
+        if drill_context:
+            parent_interval = drill_context.get("parent_interval", "")
+            if parent_interval:
+                parent_period = {"15m": "15", "60m": "60", "1d": "daily", "1w": "weekly", "1M": "monthly"}.get(parent_interval, "daily")
+                parent_freq = PERIOD_FREQUENCY_MAP.get(parent_period, "1440m")
+                try:
+                    parent_klines = get_klines(symbol, parent_interval, limit)
+                    if parent_klines and len(parent_klines) >= 10:
+                        parent_bars = convert_to_chanlun_bars(parent_klines)
+                        parent_df = pd.DataFrame(parent_bars).rename(columns={
+                            "date": "date", "o": "open", "h": "high",
+                            "l": "low", "c": "close", "a": "volume",
+                        })
+                        parent_icl = ICL(code=display_symbol, frequency=parent_freq, config=None)
+                        parent_icl = parent_icl.process_klines(parent_df)
+                        parent_json = exporter.export(
+                            icl=parent_icl,
+                            symbol=display_symbol,
+                            interval=parent_interval,
+                            klines=parent_klines,
+                        )
+                        ai_json["multi_level"] = {
+                            "current_level": {
+                                "interval": interval,
+                                "role": "child",
+                                "focus_segment": {
+                                    "type": drill_context.get("segment_type", ""),
+                                    "index": drill_context.get("segment_index", ""),
+                                },
+                            },
+                            "parent_level": {
+                                "interval": parent_interval,
+                                "role": "parent",
+                                "data": parent_json,
+                            },
+                            "drill_chain": drill_context.get("drill_chain", []),
+                            "drill_depth": drill_context.get("drill_depth", 1),
+                        }
+                        print(f"[DEBUG] Multi-level analysis (astock): parent={parent_interval}, child={interval}")
+                except Exception as parent_err:
+                    print(f"[WARN] Failed to compute parent level chanlun (astock): {parent_err}")
 
         # 5. 构建 AI Prompt
         if mode == "table":

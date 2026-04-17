@@ -456,7 +456,12 @@ class SimpleICL:
     # ========================================
     
     def _calculate_fx(self, klines: List[MergedKline]) -> List[SimpleFX]:
-        """在合并后的K线上识别分型（使用原始极值）"""
+        """在合并后的K线上识别分型
+        
+        按照缠论原文：分型应该在合并后的K线上判断，使用合并后的high/low
+        而不是原始的raw_high/raw_low。这样向上合并时会忽略向下的突破，
+        向下合并时会忽略向上的突破。
+        """
         if len(klines) < 3:
             return []
         
@@ -467,23 +472,55 @@ class SimpleICL:
             curr = klines[i]
             next_ = klines[i + 1]
             
-            if curr.raw_high > prev.raw_high and curr.raw_high > next_.raw_high:
+            # 使用合并后的high/low判断分型（缠论原文）
+            is_ding = curr.high > prev.high and curr.high > next_.high
+            is_di = curr.low < prev.low and curr.low < next_.low
+            
+            if is_ding and is_di:
+                # 同时满足顶底分型，选择更极端的那个
+                high_rise_from_prev = curr.high - prev.high
+                high_rise_from_next = curr.high - next_.high
+                low_drop_from_prev = prev.low - curr.low
+                low_drop_from_next = next_.low - curr.low
+                
+                max_high_rise = max(high_rise_from_prev, high_rise_from_next)
+                max_low_drop = max(low_drop_from_prev, low_drop_from_next)
+                
+                if max_low_drop >= max_high_rise:
+                    fx = SimpleFX(
+                        fx_type="di",
+                        index=i,
+                        kline=curr,
+                        price=curr.low,
+                        time=curr.date,
+                        raw_index=curr.raw_low_idx,
+                    )
+                else:
+                    fx = SimpleFX(
+                        fx_type="ding",
+                        index=i,
+                        kline=curr,
+                        price=curr.high,
+                        time=curr.date,
+                        raw_index=curr.raw_high_idx,
+                    )
+                fx_list.append(fx)
+            elif is_ding:
                 fx = SimpleFX(
                     fx_type="ding",
                     index=i,
                     kline=curr,
-                    price=curr.raw_high,
+                    price=curr.high,
                     time=curr.date,
                     raw_index=curr.raw_high_idx,
                 )
                 fx_list.append(fx)
-            
-            elif curr.raw_low < prev.raw_low and curr.raw_low < next_.raw_low:
+            elif is_di:
                 fx = SimpleFX(
                     fx_type="di",
                     index=i,
                     kline=curr,
-                    price=curr.raw_low,
+                    price=curr.low,
                     time=curr.date,
                     raw_index=curr.raw_low_idx,
                 )
@@ -505,14 +542,14 @@ class SimpleICL:
         核心逻辑（完全按照缠论原文）：
         1. 笔延伸：
            - 同类型分型，且更极端时延伸
-           - 延伸时，新分型与当前终点之间必须至少有4根K线距离
-           - 延伸时，新分型与笔起点之间必须满足笔形成条件（>3根K线）
+           - 延伸时，新分型与当前终点之间必须至少有4根原始K线距离
+           - 延伸时，新分型与笔起点之间必须满足笔形成条件（>=5根原始K线）
         
         2. 新笔生成：
-           - 类型相反 + K线间隔>3 + 价格关系满足
+           - 类型相反 + 原始K线间隔>=5 + 价格关系满足
            - 新笔的起点 = 前一笔的终点（确保连续性）
         
-        3. 不做笔终点修正（避免破坏连续性）
+        3. 使用原始K线索引(raw_index)计算间隔，而不是合并后K线索引
         """
         if len(fx_list) < 2:
             return []
@@ -541,11 +578,11 @@ class SimpleICL:
                         if cur_fx.val > last_fx.val:
                             should_extend = True
                     
-                    # 延伸条件检查
+                    # 延伸条件检查：使用原始K线索引
                     if should_extend and len(stroke_list) >= 2:
                         pen_start_fx = stroke_list[-2]
-                        # 延伸后整笔的K线数量必须 >= 5
-                        if cur_fx.index - pen_start_fx.index < 5:
+                        # 延伸后整笔的原始K线数量必须 >= 5
+                        if cur_fx.raw_index - pen_start_fx.raw_index < 5:
                             should_extend = False
                     
                     if should_extend:
@@ -553,10 +590,10 @@ class SimpleICL:
                 
                 # 2. 新笔生成逻辑：类型相反
                 else:
-                    # 检查K线间隔（必须 > 3）
-                    kline_gap = cur_fx.index - last_fx.index
+                    # 检查原始K线间隔（必须 >= 5，即中间至少3根K线）
+                    kline_gap = cur_fx.raw_index - last_fx.raw_index
                     
-                    if kline_gap <= 3:
+                    if kline_gap < 5:
                         continue
                     
                     # 检查价格关系

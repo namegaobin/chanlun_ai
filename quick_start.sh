@@ -60,6 +60,10 @@ case "$1" in
         echo "使用简化启动脚本..."
         exec ./start_web_simple.sh
         ;;
+    "restart"|"r")
+        # 重启服务
+        exec ./restart_services.sh
+        ;;
     "stats")
         # 统计报告
         echo "📈 生成统计报告..."
@@ -87,6 +91,7 @@ case "$1" in
         echo "  structured (s) - 结构化分析"
         echo "  table (t)     - Markdown报告"
         echo "  web (w)       - 启动Web界面"
+        echo "  restart (r)   - 重启后端和前端服务"
         echo "  stats         - 统计报告"
         echo "  info (i)      - 显示环境信息"
         echo "  help (h)      - 显示帮助"
@@ -96,6 +101,7 @@ case "$1" in
         echo "示例:"
         echo "  ./quick_start.sh analyze BTCUSDT 1h 200"
         echo "  ./quick_start.sh web"
+        echo "  ./quick_start.sh restart"
         echo ""
         ;;
 esac

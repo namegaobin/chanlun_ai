@@ -14,7 +14,23 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from starlette.staticfiles import StaticFiles
 import uvicorn
 import json
+import typing
 import asyncio
+from datetime import datetime, date, timezone
+
+
+class _JSONEncoder(json.JSONEncoder):
+    """自定义 JSON 编码器，处理 datetime/Timestamp 类型"""
+    def default(self, obj):
+        if isinstance(obj, (datetime, date)):
+            return obj.isoformat()
+        return super().default(obj)
+
+
+class _CustomJSONResponse(JSONResponse):
+    """支持 datetime/Timestamp 序列化的 JSONResponse"""
+    def render(self, content: typing.Any) -> bytes:
+        return json.dumps(content, cls=_JSONEncoder, ensure_ascii=False).encode("utf-8")
 
 # Import project modules
 from binance import get_klines
@@ -56,7 +72,7 @@ async def web_index():
 
 
 @app.get("/api/kline/{symbol}/{interval}")
-async def get_kline(symbol: str, interval: str, limit: int = 1000):
+async def get_kline(symbol: str, interval: str, limit: int = 2500):
     try:
         raw_klines = get_klines(symbol, interval, limit)
 
@@ -154,28 +170,36 @@ async def analyze(request: Request):
         ai_model = data.get("ai_model")
         api_key = data.get("api_key")
 
+        # 区间套钻取上下文（包含父级缠论结构数据）
+        drill_context = data.get("drill_context")
+
+        # 多级别区间套分析开关
+        enable_multi_level = data.get("enable_multi_level", True)
+
         if not symbol or not interval:
-            return JSONResponse(content={"error": "Missing symbol or interval"}, status_code=400)
+            return _CustomJSONResponse(content={"error": "Missing symbol or interval"}, status_code=400)
 
         from api.analyze_service import analyze_chanlun
 
         # Execute AI analysis (pass test parameter, mode, and AI config)
         result = analyze_chanlun(
             symbol, interval,
-            limit=500,
+            limit=data.get("limit", 2500),
             test_mode=test,
             mode=mode,
             ai_provider=ai_provider,
             ai_model=ai_model,
-            api_key=api_key
+            api_key=api_key,
+            drill_context=drill_context,
+            enable_multi_level=enable_multi_level,
         )
 
         # Use JSONResponse to ensure proper encoding
-        return JSONResponse(content=result)
+        return _CustomJSONResponse(content=result)
 
     except Exception as e:
         import traceback
-        return JSONResponse(content={"error": str(e), "traceback": traceback.format_exc()})
+        return _CustomJSONResponse(content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 @app.post("/api/analyze/stream")
@@ -189,7 +213,7 @@ async def analyze_stream(request: Request):
         test = data.get("test", False)
 
         if not symbol or not interval:
-            return JSONResponse(content={"error": "Missing symbol or interval"}, status_code=400)
+            return _CustomJSONResponse(content={"error": "Missing symbol or interval"}, status_code=400)
 
         # 生成唯一任务ID
         task_id = f"{symbol}_{interval}_{int(asyncio.get_event_loop().time() * 1000)}"
@@ -226,7 +250,7 @@ async def analyze_stream(request: Request):
 
     except Exception as e:
         import traceback
-        return JSONResponse(content={"error": str(e), "traceback": traceback.format_exc()})
+        return _CustomJSONResponse(content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 @app.get("/api/analyze/{task_id}/result")
@@ -337,9 +361,10 @@ async def analyze_astock(request: Request):
         ai_provider = data.get("ai_provider")
         ai_model = data.get("ai_model")
         api_key = data.get("api_key")
+        drill_context = data.get("drill_context")
 
         if not symbol or not interval:
-            return JSONResponse(content={"error": "Missing symbol or interval"}, status_code=400)
+            return _CustomJSONResponse(content={"error": "Missing symbol or interval"}, status_code=400)
 
         from api.astock_analyze_service import analyze_astock_chanlun
 
@@ -350,14 +375,15 @@ async def analyze_astock(request: Request):
             mode=mode,
             ai_provider=ai_provider,
             ai_model=ai_model,
-            api_key=api_key
+            api_key=api_key,
+            drill_context=drill_context,
         )
 
-        return JSONResponse(content=result)
+        return _CustomJSONResponse(content=result)
 
     except Exception as e:
         import traceback
-        return JSONResponse(content={"error": str(e), "traceback": traceback.format_exc()})
+        return _CustomJSONResponse(content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 # ─── 黄金端点（XAUUSD）────────────────────────────────────────────
@@ -467,7 +493,7 @@ async def analyze_gold(request: Request):
         api_key = data.get("api_key")
 
         if not interval:
-            return JSONResponse(content={"error": "Missing interval"}, status_code=400)
+            return _CustomJSONResponse(content={"error": "Missing interval"}, status_code=400)
 
         # 模拟 AI 分析结果（开发中）
         import time
@@ -513,11 +539,153 @@ async def analyze_gold(request: Request):
             "version": "2.0",
             "output_mode": "scenarios"
         }
-        return JSONResponse(content=result)
+        return _CustomJSONResponse(content=result)
 
     except Exception as e:
         import traceback
-        return JSONResponse(content={"error": str(e), "traceback": traceback.format_exc()})
+        return _CustomJSONResponse(content={"error": str(e), "traceback": traceback.format_exc()})
+
+# ─── 区间套钻取：带时间范围的 K 线查询端点 ───────────────────────────
+
+def _run_chanlun_analysis(engine_klines: list, code: str, frequency: str):
+    """通用缠论分析：输入 engine 格式 K 线，返回 (bi_list, xd_list, bi_zs_list, fx_list)"""
+    config = EngineConfig()
+    engine_wrapper = ChanlunEngine(config)
+    icl_result = engine_wrapper.analyze_klines(
+        code=code,
+        frequency=frequency,
+        klines=engine_klines
+    )
+    return (
+        icl_result.get_bis(),
+        icl_result.get_xds(),
+        icl_result.get_bi_zss(),
+        icl_result.get_fx_list(),
+    )
+
+
+def _build_chanlun_result(bi_list, xd_list, bi_zs_list, fx_list, frontend_bars, symbol: str, interval: str, market: str = "crypto"):
+    """通用结果格式化"""
+    return {
+        "meta": {"symbol": symbol, "interval": interval, "count": len(frontend_bars), "market": market},
+        "klines": frontend_bars,
+        "bi": [
+            {
+                "index": bi.index, "type": bi.type,
+                "start_price": bi.start_price, "end_price": bi.end_price,
+                "start_date": str(bi.start_time), "end_date": str(bi.end_time),
+                "buy_sell_point": bi.mmds[0].name if bi.mmds and len(bi.mmds) > 0 else None
+            }
+            for bi in bi_list
+        ],
+        "xd": [
+            {
+                "index": xd.index, "type": xd.type,
+                "start_price": xd.start_price, "end_price": xd.end_price,
+                "start_date": str(xd.start_time), "end_date": str(xd.end_time)
+            }
+            for xd in xd_list
+        ],
+        "zs": [
+            {
+                "zg": zs.zg, "zd": zs.zd, "gg": zs.gg, "dd": zs.dd,
+                "start_date": str(zs.start_time), "end_date": str(zs.end_time)
+            }
+            for zs in bi_zs_list
+        ],
+        "fx": [
+            {"index": fx.index, "type": fx.type, "price": fx.val, "date": str(fx.time)}
+            for fx in fx_list
+        ]
+    }
+
+
+def _filter_by_time_range(raw_klines: list, start_time_ms: int, end_time_ms: int):
+    """按时间范围（毫秒时间戳）过滤 K 线数据，保留 start_time >= start_time_ms 且 open_time <= end_time_ms 的记录"""
+    start_dt = datetime.fromtimestamp(start_time_ms / 1000.0, tz=timezone.utc) if start_time_ms else None
+    end_dt = datetime.fromtimestamp(end_time_ms / 1000.0, tz=timezone.utc) if end_time_ms else None
+    filtered = raw_klines
+    if start_dt:
+        filtered = [k for k in filtered if k["open_time"] >= start_dt]
+    if end_dt:
+        filtered = [k for k in filtered if k["open_time"] <= end_dt]
+    return filtered
+
+
+@app.get("/api/kline/{symbol}/{interval}/range")
+async def get_kline_range(symbol: str, interval: str, start_time: int, end_time: int):
+    """加密货币 K 线时间范围查询（区间套钻取用）"""
+    try:
+        raw_klines = get_klines(symbol, interval, 1000, start_time=start_time)
+        if not raw_klines or len(raw_klines) < 3:
+            return {"error": "Insufficient data in range"}
+
+        raw_klines = _filter_by_time_range(raw_klines, start_time, end_time)
+        if len(raw_klines) < 3:
+            return {"error": "Insufficient data after filtering"}
+
+        engine_klines = [
+            {"date": k["open_time"], "open": k["open"], "high": k["high"],
+             "low": k["low"], "close": k["close"], "volume": 0.0}
+            for k in raw_klines
+        ]
+        bi_list, xd_list, bi_zs_list, fx_list = _run_chanlun_analysis(engine_klines, symbol, interval)
+        frontend_bars = convert_to_chanlun_bars(raw_klines)
+        return _build_chanlun_result(bi_list, xd_list, bi_zs_list, fx_list, frontend_bars, symbol, interval)
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+@app.get("/api/astock/kline/{symbol}/{interval}/range")
+async def get_astock_kline_range(symbol: str, interval: str, start_time: int, end_time: int):
+    """A 股 K 线时间范围查询（区间套钻取用）"""
+    try:
+        raw_klines = astock_get_klines(symbol, interval, 1000)
+        if not raw_klines or len(raw_klines) < 3:
+            return {"error": "Insufficient A-stock data"}
+
+        raw_klines = _filter_by_time_range(raw_klines, start_time, end_time)
+        if len(raw_klines) < 3:
+            return {"error": "Insufficient A-stock data in range"}
+
+        engine_klines = [
+            {"date": k["open_time"], "open": k["open"], "high": k["high"],
+             "low": k["low"], "close": k["close"], "volume": k.get("volume", 0)}
+            for k in raw_klines
+        ]
+        bi_list, xd_list, bi_zs_list, fx_list = _run_chanlun_analysis(engine_klines, symbol, interval)
+        frontend_bars = astock_convert_to_chanlun_bars(raw_klines)
+        return _build_chanlun_result(bi_list, xd_list, bi_zs_list, fx_list, frontend_bars, symbol, interval, "astock")
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+@app.get("/api/gold/kline/{interval}/range")
+async def get_gold_kline_range(interval: str, start_time: int, end_time: int):
+    """黄金 K 线时间范围查询（区间套钻取用）"""
+    try:
+        raw_klines = gold_get_klines(interval=interval, limit=1000)
+        if not raw_klines or len(raw_klines) < 3:
+            return {"error": "Insufficient gold data"}
+
+        raw_klines = _filter_by_time_range(raw_klines, start_time, end_time)
+        if len(raw_klines) < 3:
+            return {"error": "Insufficient gold data in range"}
+
+        engine_klines = [
+            {"date": k["open_time"], "open": k["open"], "high": k["high"],
+             "low": k["low"], "close": k["close"], "volume": 0.0}
+            for k in raw_klines
+        ]
+        bi_list, xd_list, bi_zs_list, fx_list = _run_chanlun_analysis(engine_klines, "XAUUSD", interval)
+        frontend_bars = gold_convert_to_chanlun_bars(raw_klines)
+        return _build_chanlun_result(bi_list, xd_list, bi_zs_list, fx_list, frontend_bars, "XAUUSD", interval, "gold")
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
 
 app.mount("/static", StaticFiles(directory=str(web_dir)), name="static")
 

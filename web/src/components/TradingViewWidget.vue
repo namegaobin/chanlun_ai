@@ -3,10 +3,11 @@
     <div class="widget-header">
       <h3>{{ symbol }} - {{ interval }}</h3>
       <div class="widget-controls">
+        <span v-if="drillEnabled" class="drill-hint">点击笔/线段可钻取下一级</span>
         <button @click="refreshChart" class="refresh-btn">🔄 刷新</button>
       </div>
     </div>
-    <div ref="chartContainer" class="chart-container"></div>
+    <div ref="chartContainer" class="chart-container" :class="{ 'drill-cursor': drillEnabled }"></div>
     <div v-if="loading" class="loading-overlay">
       <div class="loading-spinner"></div>
       <p>加载中...</p>
@@ -54,13 +55,31 @@ interface Props {
   symbol: string
   interval: string
   market?: MarketType
+  drillEnabled?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  market: 'crypto'
+  market: 'crypto',
+  drillEnabled: false
 })
+
+const emit = defineEmits<{
+  (e: 'drill-down', payload: {
+    segmentType: 'bi' | 'xd'
+    segmentIndex: number
+    startDate: string
+    endDate: string
+    startPrice: number
+    endPrice: number
+  }): void
+}>()
 const chartContainer = ref<HTMLDivElement>()
 const loading = ref(true)
+
+// 存储原始 bi/xd 数据用于钻取点击检测
+const biDataStore = ref<any[]>([])
+const xdDataStore = ref<any[]>([])
+
 let chart: echarts.ECharts | null = null
 
 // 缠论图层显示控制
@@ -91,14 +110,17 @@ const fetchKlines = async () => {
     
     let endpoint
     if (props.market === 'astock') {
-      endpoint = `${apiHost}/api/astock/kline/${props.symbol}/${props.interval}?limit=500`
+      endpoint = `${apiHost}/api/astock/kline/${props.symbol}/${props.interval}?limit=2500`
     } else if (props.market === 'gold') {
-      endpoint = `${apiHost}/api/gold/kline/${props.interval}?limit=500`
+      endpoint = `${apiHost}/api/gold/kline/${props.interval}?limit=2500`
     } else {
-      endpoint = `${apiHost}/api/kline/${props.symbol}/${props.interval}?limit=500`
+      endpoint = `${apiHost}/api/kline/${props.symbol}/${props.interval}?limit=2500`
     }
     const response = await fetch(endpoint)
     const data = await response.json()
+    // 存储原始数据用于钻取
+    biDataStore.value = data.bi || []
+    xdDataStore.value = data.xd || []
     return data
   } catch (error) {
     console.error('Failed to fetch klines:', error)
@@ -155,6 +177,7 @@ const initChart = async () => {
   }
 
   if (chart) {
+    chart.getZr().off('click')
     chart.dispose()
   }
 
@@ -422,9 +445,12 @@ const initChart = async () => {
           data: zsRectangles
         },
         markLine: {
+          silent: false,
           symbol: ['circle', 'circle'],
-          symbolSize: 6,
+          symbolSize: 8,
           lineStyle: { type: 'solid', width: 2 },
+          label: { show: false },
+          animation: false,
           data: biMarkLines
         },
         markPoint: {
@@ -451,9 +477,12 @@ const initChart = async () => {
           borderColor0: 'transparent'
         },
         markLine: {
+          silent: false,
           symbol: ['diamond', 'diamond'],
-          symbolSize: 8,
+          symbolSize: 10,
           lineStyle: { type: 'solid', width: 3 },
+          label: { show: false },
+          animation: false,
           data: xdMarkLines
         }
       },
@@ -517,6 +546,103 @@ const initChart = async () => {
 
   chart.setOption(option)
   loading.value = false
+
+  // 区间套钻取：通过坐标匹配检测笔/线段点击
+  if (props.drillEnabled && chart) {
+    // 使用 getZr 监听画布任意位置点击（而非仅 series 数据点）
+    chart.getZr().off('click')
+    chart.getZr().on('click', (params: any) => {
+      const pixelX = params.offsetX
+      const pixelY = params.offsetY
+
+      // 将像素坐标转为 grid 0（K线区域）的数据坐标
+      let pointInGrid: number[] | undefined
+      try {
+        pointInGrid = chart!.convertFromPixel({ gridIndex: 0 }, [pixelX, pixelY])
+      } catch {
+        return
+      }
+      if (!pointInGrid) return
+
+      const clickDataIndex = Math.round(pointInGrid[0])
+      const clickPrice = pointInGrid[1]
+
+      if (clickDataIndex < 0 || isNaN(clickPrice)) return
+
+      // 在 bi 中查找包含此点击位置的线段
+      const biHit = findSegmentAtPosition(biDataStore.value, dates, clickDataIndex, clickPrice)
+      // 在 xd 中查找
+      const xdHit = findSegmentAtPosition(xdDataStore.value, dates, clickDataIndex, clickPrice)
+
+      // xd 优先（层级更高），否则 bi
+      if (xdHit) {
+        emit('drill-down', {
+          segmentType: 'xd' as const,
+          segmentIndex: xdHit.index,
+          startDate: xdHit.start_date,
+          endDate: xdHit.end_date,
+          startPrice: xdHit.start_price,
+          endPrice: xdHit.end_price,
+        })
+      } else if (biHit) {
+        emit('drill-down', {
+          segmentType: 'bi' as const,
+          segmentIndex: biHit.index,
+          startDate: biHit.start_date,
+          endDate: biHit.end_date,
+          startPrice: biHit.start_price,
+          endPrice: biHit.end_price,
+        })
+      }
+    })
+  }
+}
+
+// 根据点击的数据索引和价格，查找对应的笔或线段
+function findSegmentAtPosition(
+  segments: any[],
+  dates: string[],
+  clickDataIndex: number,
+  clickPrice: number
+): any | null {
+  if (!segments || segments.length === 0) return null
+
+  for (const seg of segments) {
+    const startIdx = findDateIndexInDates(dates, seg.start_date)
+    const endIdx = findDateIndexInDates(dates, seg.end_date)
+    if (startIdx < 0 || endIdx < 0) continue
+
+    const minIdx = Math.min(startIdx, endIdx)
+    const maxIdx = Math.max(startIdx, endIdx)
+    const minPrice = Math.min(seg.start_price, seg.end_price)
+    const maxPrice = Math.max(seg.start_price, seg.end_price)
+
+    // 判断点击位置是否在笔/线段范围内（允许一定容差）
+    const indexTolerance = 3 // 允许3个K线宽度的容差
+    const priceRange = maxPrice - minPrice
+    const priceTolerance = Math.max(priceRange * 0.3, maxPrice * 0.005) // 30%价格范围或0.5%的容差
+
+    if (
+      clickDataIndex >= minIdx - indexTolerance &&
+      clickDataIndex <= maxIdx + indexTolerance &&
+      clickPrice >= minPrice - priceTolerance &&
+      clickPrice <= maxPrice + priceTolerance
+    ) {
+      return seg
+    }
+  }
+  return null
+}
+
+function findDateIndexInDates(dates: string[], targetDate: string): number {
+  if (!targetDate) return -1
+  const normalizedTarget = targetDate.replace(' ', 'T')
+  for (let i = 0; i < dates.length; i++) {
+    const date = dates[i]
+    if (date === normalizedTarget || date === targetDate) return i
+    if (date.substring(0, 19) === normalizedTarget.substring(0, 19)) return i
+  }
+  return -1
 }
 
 const refreshChart = () => {
@@ -572,6 +698,16 @@ watch([() => props.symbol, () => props.interval, () => props.market], () => {
   .widget-controls {
     display: flex;
     gap: 8px;
+    align-items: center;
+
+    .drill-hint {
+      font-size: 12px;
+      color: #2962FF;
+      background: rgba(41, 98, 255, 0.08);
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-weight: 500;
+    }
 
     .refresh-btn {
       padding: 4px 12px;
@@ -593,6 +729,12 @@ watch([() => props.symbol, () => props.interval, () => props.market], () => {
 .chart-container {
   flex: 1;
   min-height: 500px;
+}
+
+.drill-cursor {
+  :deep(canvas) {
+    cursor: pointer !important;
+  }
 }
 
 .loading-overlay {

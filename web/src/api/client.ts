@@ -4,7 +4,7 @@ import type { ChanlunData, AIAnalysisResult } from '@/types/chanlun';
 
 const api = axios.create({
   baseURL: '/api',
-  timeout: 60000,  // 60s timeout
+  timeout: 300000,  // 5min timeout
   headers: {
     'Content-Type': 'application/json'
   }
@@ -33,7 +33,7 @@ api.interceptors.response.use(
 export async function getKlineData(
   symbol: string,
   interval: string,
-  limit: number = 1000
+  limit: number = 2500
 ): Promise<ChanlunData> {
   const response = await api.get<ChanlunData>(`/kline/${symbol}/${interval}`, {
     params: { limit }
@@ -49,18 +49,21 @@ export async function analyzeAI(
   test: boolean = false,  // New test parameter
   aiProvider?: string,   // New: AI provider
   aiModel?: string,      // New: AI model
-  apiKey?: string        // New: API key
+  apiKey?: string,       // New: API key
+  drillContext?: any,    // 区间套钻取上下文
+  enableMultiLevel: boolean = true  // 新增：是否启用多级别分析
 ): Promise<AIAnalysisResult> {
   const response = await api.post<AIAnalysisResult>('/analyze', {
     symbol,
     interval,
     mode,
     test,
-    limit: 500,
-    // New: AI configuration
+    limit: 2500,
     ai_provider: aiProvider,
     ai_model: aiModel,
-    api_key: apiKey
+    api_key: apiKey,
+    drill_context: drillContext,
+    enable_multi_level: enableMultiLevel,  // 新增：多级别分析参数
   });
   return response.data;
 }
@@ -76,7 +79,7 @@ export async function analyzeAITest(
     interval,
     mode: 'structured',
     test,
-    limit: 500
+    limit: 2500
   });
   return response.data;
 }
@@ -106,23 +109,67 @@ export async function analyzeAstockAI(
   test: boolean = false,
   aiProvider?: string,
   aiModel?: string,
-  apiKey?: string
+  apiKey?: string,
+  drillContext?: any,
+  enableMultiLevel: boolean = true  // 新增：是否启用多级别分析
 ): Promise<AIAnalysisResult> {
   const response = await api.post<AIAnalysisResult>('/astock/analyze', {
     symbol,
     interval,
     mode,
     test,
-    limit: 500,
+    limit: 2500,
     ai_provider: aiProvider,
     ai_model: aiModel,
-    api_key: apiKey
+    api_key: apiKey,
+    drill_context: drillContext,
+    enable_multi_level: enableMultiLevel,  // 新增：多级别分析参数
   });
   return response.data;
 }
 
 // 市场类型
 export type MarketType = 'crypto' | 'astock' | 'gold';
+
+// ─── 区间套钻取：时间范围查询 ─────────────────────────────────────
+
+// Crypto kline by time range (drill-down)
+export async function getKlineDataRange(
+  symbol: string,
+  interval: string,
+  startTime: number,
+  endTime: number
+): Promise<ChanlunData> {
+  const response = await api.get<ChanlunData>(`/kline/${symbol}/${interval}/range`, {
+    params: { start_time: startTime, end_time: endTime }
+  });
+  return response.data;
+}
+
+// A-stock kline by time range (drill-down)
+export async function getAstockKlineDataRange(
+  symbol: string,
+  interval: string,
+  startTime: number,
+  endTime: number
+): Promise<ChanlunData> {
+  const response = await api.get<ChanlunData>(`/astock/kline/${symbol}/${interval}/range`, {
+    params: { start_time: startTime, end_time: endTime }
+  });
+  return response.data;
+}
+
+// Gold kline by time range (drill-down)
+export async function getGoldKlineDataRange(
+  interval: string,
+  startTime: number,
+  endTime: number
+): Promise<ChanlunData> {
+  const response = await api.get<ChanlunData>(`/gold/kline/${interval}/range`, {
+    params: { start_time: startTime, end_time: endTime }
+  });
+  return response.data;
+}
 
 // A 股预设标的
 export const ASTOCK_PRESETS: Array<{ code: string; name: string }> = [
@@ -167,17 +214,21 @@ export async function analyzeGoldAI(
   test: boolean = false,
   aiProvider?: string,
   aiModel?: string,
-  apiKey?: string
+  apiKey?: string,
+  drillContext?: any,
+  enableMultiLevel: boolean = true  // 新增：是否启用多级别分析
 ): Promise<AIAnalysisResult> {
   const response = await api.post<AIAnalysisResult>('/gold/analyze', {
     symbol,
     interval,
     mode,
     test,
-    limit: 500,
+    limit: 2500,
     ai_provider: aiProvider,
     ai_model: aiModel,
-    api_key: apiKey
+    api_key: apiKey,
+    drill_context: drillContext,
+    enable_multi_level: enableMultiLevel,  // 新增：多级别分析参数
   });
   return response.data;
 }
