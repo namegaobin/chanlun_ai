@@ -328,6 +328,98 @@ curl -X POST http://localhost:8001/analyze -H "Content-Type: application/json" -
 
 ---
 
-**文档更新时间**: 2026-04-17 16:07 GMT+8  
+---
+
+## 🧠 提示词优化记录（2026-04-17 ~ 2026-04-18）
+
+### 优化背景
+通过分析日志 `logs/api_20260417_194344.log` 中完整提示词（~1100行）与AI返回结果的差距，识别出多个关键问题并逐一修复。
+
+### 分析方法
+- 对比日志中发送给大模型的完整 prompt 与 AI 返回的 JSON 结构
+- 聚焦 `prompt_builder.py` 中的 system_block、TERMINOLOGY_BLOCK、structure_priority_block、output_block 四大模块
+- 基于 **4h定方向 → 1h找买卖点 → 15m精入场** 的多级别分工模型进行验证
+
+### 发现的关键问题
+
+| # | 问题 | 严重程度 | 描述 |
+|---|------|----------|------|
+| 1 | 买卖点遗漏 | 严重 | 1h bis 中存在 1buy/1sell 等信号，AI 只输出了 ["3buy"] |
+| 2 | 背驰信号遗漏 | 严重 | 多笔有 bcs=["bi"]，AI 输出 divergences=[]（空） |
+| 3 | 买卖点有效性评估缺失 | 中等 | 提示词要求评估但 AI reasoning 完全未做 |
+| 4 | extend 中枢被忽略 | 中等 | 1h 中枢[1] relation=extend，AI 未提及 |
+| 5 | signals 提取无规范 | 中等 | 提示词未明确要求从数据中遍历提取 signals 字段 |
+
+### 已实施的优化
+
+#### 1. 新增【数据扫描纪律】（prompt_builder.py - system_block）
+强制 AI 在分析前按 4 步扫描：
+- **步骤1**：逐笔扫描各级别 bis 的 mmds 字段，记录所有买卖点
+- **步骤2**：逐笔扫描各级别 bis 的 bcs 字段，记录所有背驰信号
+- **步骤3**：检查各级别所有 bi_zss 的 relation，特别关注 extend 中枢
+- **步骤4**：将扫描结果汇总到 signals 字段，禁止遗漏或留空
+
+#### 2. 增强盘整背驰进入段定位方法（TERMINOLOGY_BLOCK）
+- 增加"同方向匹配"规则：进入段必须与中枢内第一笔同方向
+- 增加防错指南：给出典型错误示例（如中枢8进入段选错）
+- 增加正确定位口诀："进入段=中枢前同方向最后一笔，离开段=中枢后同方向第一笔"
+
+#### 3. 新增 signals 提取规范（output_block 第9条）
+- `buy_sell_points` = 各级别所有 bis 中 mmds 的并集（去重）
+- `divergences` = 各级别所有 bis 中 bcs 的并集（去重）
+- 禁止输出空的 buy_sell_points 或 divergences（除非数据确实无信号）
+
+#### 4. 增强 extend 中枢检查（structure_priority_block）
+- 必须检查各级别的**所有**中枢 relation，不能只看最后一个
+- extend 存在时趋势不稳定，需在 reasoning 中说明
+
+#### 5. 多级别分析改为通用主级别驱动
+- **analyze_service.py**: 当 multi_level 存在时，自动将 `meta.interval` 设为中间级别
+  ```python
+  mid_level = analyzed_levels[len(analyzed_levels) // 2]  # ["15m","1h","4h"] → "1h"
+  ai_json["meta"]["interval"] = mid_level
+  ```
+- **prompt_builder.py**: 所有硬编码的 "4h/1h/15m" 改为通用描述
+  - "大级别" = 定方向
+  - "主级别(meta.interval)" = 找买卖点（核心）
+  - "其余级别" = 辅助确认
+
+#### 6. 买卖点权重区分级别（structure_priority_block）
+- 主级别 1 类买卖点（带背驰）: +12%
+- 主级别 2 类买卖点: +8%
+- 主级别 3 类买卖点: +5%
+- 其余级别买卖点: +3%（仅辅助确认）
+
+### 日志分析要点
+- 日志路径：`logs/api_*.log`
+- 提示词位于日志前半部分（约 31~1139 行），标记为 `prompt`
+- AI 返回位于日志后半部分，标记为 `response`
+- 分析时重点对比 `signals` 字段与原始数据中 bis 的 mmds/bcs
+
+### 待验证项
+- [ ] 优化后重新跑分析，验证 AI 是否正确扫描 1h 买卖点
+- [ ] 验证 signals 字段是否完整包含各级别 mmds/bcs 并集
+- [ ] 验证 extend 中枢是否被正确识别和评估
+
+---
+
+## 📌 关键设计决策记录
+
+### 多级别分析框架
+- **分工模型**: 大级别定方向 → 主级别找买卖点 → 小级别精入场
+- **主级别选取**: multi_level 存在时自动取中间级别（analyzed_levels 中间位）
+- **当前配置**: 15m/1h/4h 三级别，主级别 = 1h
+- **信号优先级**: 主级别买卖点权重远高于其余级别
+
+### 提示词架构（prompt_builder.py）
+- **system_block**: 角色定义 + 数据扫描纪律 + 多级别分析纪律 + 概率约束
+- **data_block**: 缠论 JSON 数据（bis/bi_zss/segments 等）
+- **TERMINOLOGY_BLOCK**: 缠论术语定义 + 盘整背驰判定方法 + 防错指南
+- **structure_priority_block**: 概率分配规则 + 买卖点权重 + 错误示例
+- **output_block**: JSON 输出格式规范 + signals 提取规范 + reasoning 要求
+
+---
+
+**文档更新时间**: 2026-04-18 16:23 GMT+8  
 **项目状态**: ✅ 生产就绪  
 **维护建议**: 定期更新依赖，监控API使用情况
