@@ -414,15 +414,29 @@ class Chan_Class:
         self.on_process_fx(self.chan_k_list)
 
     def on_process_fx(self, data):
+        """分型判断（严格遵循缠论第62课定义）
+
+        缠论原文：顶分型必须满足：
+        1. 中间K线高点最高
+        2. 中间K线低点也>左边K线低点（辅助条件）
+
+        底分型必须满足：
+        1. 中间K线低点最低
+        2. 中间K线高点<左边K线高点（辅助条件）
+        """
         if len(data) > 2:
             flag = False
-            if data[-2].high_price >= data[-1].high_price and data[-2].high_price >= data[-3].high_price:
-                # 形成顶分型 [high_price, low, dt, direction, index of k_list]
+            # 顶分型：中间K线高点最高，且低点>左边K线低点
+            if (data[-2].high_price >= data[-1].high_price and
+                data[-2].high_price >= data[-3].high_price and
+                data[-2].low_price > data[-3].low_price):  # 缠论辅助条件
                 self.fx_list.append([data[-2].high_price, data[-2].low_price, data[-2].datetime, 'up', len(data) - 2])
                 flag = True
 
-            if data[-2].low_price <= data[-1].low_price and data[-2].low_price <= data[-3].low_price:
-                # 形成底分型
+            # 底分型：中间K线低点最低，且高点<左边K线高点
+            if (data[-2].low_price <= data[-1].low_price and
+                data[-2].low_price <= data[-3].low_price and
+                data[-2].high_price < data[-3].high_price):  # 缠论辅助条件
                 self.fx_list.append([data[-2].high_price, data[-2].low_price, data[-2].datetime, 'down', len(data) - 2])
                 flag = True
 
@@ -670,10 +684,22 @@ class Chan_Class:
             if not self.pivot_list or (len(self.pivot_list) > 0 and len(data) - self.pivot_list[-1][6] > 4):
                 cur_pivot = [data[-5][2], last_fx[2]]
                 if cur_fx[3] == 'down' and data[-2][0] > data[-5][1]:
-                    ZD = max(data[-3][1], data[-5][1])
-                    ZG = min(data[-2][0], data[-4][0])
-                    DD = min(data[-3][1], data[-5][1])
-                    GG = max(data[-2][0], data[-4][0])
+                    # 缠论第17课：中枢区间由前三笔的重叠区间确定
+                    # 每一笔由相邻两个分型构成，前三笔需要前4个分型
+                    # 笔1: data[-5]→data[-4], 笔2: data[-4]→data[-3], 笔3: data[-3]→data[-2]
+                    stroke1_high = max(data[-5][0], data[-4][0])
+                    stroke1_low = min(data[-5][1], data[-4][1])
+                    stroke2_high = max(data[-4][0], data[-3][0])
+                    stroke2_low = min(data[-4][1], data[-3][1])
+                    stroke3_high = max(data[-3][0], data[-2][0])
+                    stroke3_low = min(data[-3][1], data[-2][1])
+                    ZD = max(stroke1_low, stroke2_low, stroke3_low)  # 前三笔低点的最大值
+                    ZG = min(stroke1_high, stroke2_high, stroke3_high)  # 前三笔高点的最小值
+                    # GG/DD 用所有分型的极值（分型列表而非笔列表）
+                    all_highs = [s[0] for s in data[-5:]]
+                    all_lows = [s[1] for s in data[-5:]]
+                    DD = min(all_lows)
+                    GG = max(all_highs)
                     if ZG > ZD:
                         cur_pivot.append(ZD)
                         cur_pivot.append(ZG)
@@ -689,10 +715,19 @@ class Chan_Class:
                         new_pivot = cur_pivot
                         # 中枢形成，判断背驰
                 if cur_fx[3] == 'up' and data[-2][1] < data[-5][0]:
-                    ZD = max(data[-2][1], data[-4][1])
-                    ZG = min(data[-3][0], data[-5][0])
-                    DD = min(data[-2][1], data[-4][1])
-                    GG = max(data[-3][0], data[-5][0])
+                    # 缠论第17课：中枢区间由前三笔的重叠区间确定
+                    stroke1_high = max(data[-5][0], data[-4][0])
+                    stroke1_low = min(data[-5][1], data[-4][1])
+                    stroke2_high = max(data[-4][0], data[-3][0])
+                    stroke2_low = min(data[-4][1], data[-3][1])
+                    stroke3_high = max(data[-3][0], data[-2][0])
+                    stroke3_low = min(data[-3][1], data[-2][1])
+                    ZD = max(stroke1_low, stroke2_low, stroke3_low)
+                    ZG = min(stroke1_high, stroke2_high, stroke3_high)
+                    all_highs = [s[0] for s in data[-5:]]
+                    all_lows = [s[1] for s in data[-5:]]
+                    DD = min(all_lows)
+                    GG = max(all_highs)
                     if ZG > ZD:
                         cur_pivot.append(ZD)
                         cur_pivot.append(ZG)
@@ -737,12 +772,21 @@ class Chan_Class:
                            [data[len(data) - 2], data[len(data) - 1]]]
 
                 if last_pivot[4] == 'up':
-                    # stroke_change导致的笔减少了
+                    # 中枢扩展时重新计算 ZD/ZG/GG/DD
+                    # 缠论第17课：ZD/ZG由前三笔确定，GG/DD由所有分型确定
                     if len(data) > start + 3:
-                        last_pivot[2] = max(data[start + 1][1], data[start + 3][1])
-                        last_pivot[3] = min(data[start][0], data[start + 2][0])
-                        last_pivot[8] = max(data[start][0], data[start + 2][0])
-                        last_pivot[9] = min(data[start + 1][1], data[start + 3][1])
+                        # 前三笔（用前4个分型计算）
+                        s1_high = max(data[start][0], data[start+1][0])
+                        s1_low = min(data[start][1], data[start+1][1])
+                        s2_high = max(data[start+1][0], data[start+2][0])
+                        s2_low = min(data[start+1][1], data[start+2][1])
+                        s3_high = max(data[start+2][0], data[start+3][0])
+                        s3_low = min(data[start+2][1], data[start+3][1])
+                        last_pivot[2] = max(s1_low, s2_low, s3_low)  # ZD
+                        last_pivot[3] = min(s1_high, s2_high, s3_high)  # ZG
+                        # GG/DD 用所有分型的极值
+                        last_pivot[8] = max(s[0] for s in data[start:len(data)])  # GG
+                        last_pivot[9] = min(s[1] for s in data[start:len(data)])  # DD
                     if cur_fx[3] == 'up':
                         if sell[0]:
                             # 一卖后的顶分型判断一卖是否有效，无效则将上一个一卖置为无效
@@ -756,15 +800,62 @@ class Chan_Class:
                                     sell[1][5] = 0
                                     sell[1][6] = self.k_list[-1].datetime
                                     sell[1] = []
-                        # 判断背驰
-                        if self.on_turn(enter, exit, ee_data, last_pivot[4]) and cur_fx[0] > last_pivot[8]:
-                            ts.append([last_fx[2], cur_fx[2]])
-                            if not sell[0]:
-                                # 形成一卖
-                                ans, qjt_pivot_list = self.qjt_turn(last_fx[2], cur_fx[2], 'up')
-                                if ans:
+                        # P0：笔级别背驰判断
+                        pen_diverged = False
+                        if self.on_turn(enter, exit, ee_data, last_pivot[4]):
+                            pen_diverged = True
+                            ChanLog.log(self.freq, self.symbol, f'中枢级别背驰确认(卖): 进入段={enter}, 离开段={exit}')
+
+                        # P2：成交量背驰确认（辅助条件）
+                        vol_diverged = False
+                        if len(ee_data) >= 2 and len(ee_data[0]) >= 2 and len(ee_data[1]) >= 2:
+                            enter_start_idx = ee_data[0][0][4] if len(ee_data[0][0]) > 4 else -1
+                            enter_end_idx = ee_data[0][1][4] if len(ee_data[0][1]) > 4 else -1
+                            exit_start_idx = ee_data[1][0][4] if len(ee_data[1][0]) > 4 else -1
+                            exit_end_idx = ee_data[1][1][4] if len(ee_data[1][1]) > 4 else -1
+                            # 索引必须有效（>=0）
+                            if enter_start_idx >= 0 and exit_start_idx >= 0:
+                                vol_diverged = self._check_volume_divergence(
+                                    enter_start_idx, enter_end_idx, exit_start_idx, exit_end_idx
+                                )
+
+                        # P6-2: 区分趋势背驰和盘整背驰
+                        if pen_diverged:
+                            bs_type = self.cal_bs_type()
+                            is_trend_bc = (bs_type == '趋势')
+
+                            # 缠论原文验证条件（简化版）：
+                            # 趋势背驰一卖：突破前中枢ZG即可（第33课）
+                            # 盘整背驰一卖：回到中枢上沿附近即可（第25课放宽）
+                            sell_valid = False
+                            if is_trend_bc and len(self.pivot_list) >= 2:
+                                # 趋势背驰：检查是否离开前中枢
+                                pre_pivot = self.pivot_list[-2]
+                                pre_ZG = pre_pivot[3]  # 前中枢上沿
+                                if cur_fx[0] > pre_ZG:  # 突破前中枢ZG
+                                    sell_valid = True
+                            # 盘整背驰或有趋势但未突破前中枢：只要高于中枢ZG即可
+                            if not sell_valid and cur_fx[0] > last_pivot[3]:
+                                sell_valid = True
+
+                            if sell_valid:
+                                ts.append([last_fx[2], cur_fx[2]])
+                                if not sell[0]:
+                                    # 区间套验证（一卖保持宽松，作为加分项）
+                                    qjt_confirmed, qjt_pivot_list = self.qjt_turn(last_fx[2], cur_fx[2], 'up')
+                                    qjt_depth = 0 if qjt_confirmed else -1
+
+                                    # 计算强度（成交量背驰加分）
+                                    strength = 70
+                                    if vol_diverged:
+                                        strength += 10
+                                        ChanLog.log(self.freq, self.symbol, '一卖增强: 成交量背驰确认')
+                                    if qjt_confirmed:
+                                        strength += 10
+                                        ChanLog.log(self.freq, self.symbol, '一卖增强: 区间套确认')
+
                                     sell[0] = [cur_fx[2], cur_fx[0], 'S1', self.k_list[-1].datetime, len(data) - 1, 1,
-                                               None, self.cal_bs_type(), None, qjt_pivot_list]
+                                               None, bs_type, strength, qjt_pivot_list, qjt_depth]
                                     self.on_buy_sell(sell[0])
                         if sell[0] and not sell[1]:
                             pos_sell1 = sell[0][4]
@@ -825,12 +916,21 @@ class Chan_Class:
 
 
                 else:
-                    # stroke_change导致的笔减少了
+                    # 中枢扩展时重新计算 ZD/ZG/GG/DD
+                    # 缠论第17课：ZD/ZG由前三笔确定，GG/DD由所有分型确定
                     if len(data) > start + 3:
-                        last_pivot[2] = max(data[start][1], data[start + 2][1])
-                        last_pivot[3] = min(data[start + 1][0], data[start + 3][0])
-                        last_pivot[8] = max(data[start + 1][0], data[start + 3][0])
-                        last_pivot[9] = min(data[start][1], data[start + 2][1])
+                        # 前三笔（用前4个分型计算）
+                        s1_high = max(data[start][0], data[start+1][0])
+                        s1_low = min(data[start][1], data[start+1][1])
+                        s2_high = max(data[start+1][0], data[start+2][0])
+                        s2_low = min(data[start+1][1], data[start+2][1])
+                        s3_high = max(data[start+2][0], data[start+3][0])
+                        s3_low = min(data[start+2][1], data[start+3][1])
+                        last_pivot[2] = max(s1_low, s2_low, s3_low)  # ZD
+                        last_pivot[3] = min(s1_high, s2_high, s3_high)  # ZG
+                        # GG/DD 用所有分型的极值
+                        last_pivot[8] = max(s[0] for s in data[start:len(data)])  # GG
+                        last_pivot[9] = min(s[1] for s in data[start:len(data)])  # DD
                     if cur_fx[3] == 'down':
                         if buy[0]:
                             # 一买后的底分型判断一买是否有效，无效则将上一个一买置为无效
@@ -852,14 +952,65 @@ class Chan_Class:
                             pen_diverged = True
                             ChanLog.log(self.freq, self.symbol, f'中枢级别背驰确认: 进入段={enter}, 离开段={exit}')
 
-                        if pen_diverged and cur_fx[1] < last_pivot[9]:
-                            ts.append([last_fx[2], cur_fx[2]])
-                            if not buy[0]:
-                                # 形成一买
-                                ans, qjt_pivot_list = self.qjt_turn(last_fx[2], cur_fx[2], 'down')
-                                if ans:
+                        # P2：成交量背驰确认（辅助条件）
+                        vol_diverged = False
+                        if len(ee_data) >= 2 and len(ee_data[0]) >= 2 and len(ee_data[1]) >= 2:
+                            enter_start_idx = ee_data[0][0][4] if len(ee_data[0][0]) > 4 else -1
+                            enter_end_idx = ee_data[0][1][4] if len(ee_data[0][1]) > 4 else -1
+                            exit_start_idx = ee_data[1][0][4] if len(ee_data[1][0]) > 4 else -1
+                            exit_end_idx = ee_data[1][1][4] if len(ee_data[1][1]) > 4 else -1
+                            # 索引必须有效（>=0）
+                            if enter_start_idx >= 0 and exit_start_idx >= 0:
+                                vol_diverged = self._check_volume_divergence(
+                                    enter_start_idx, enter_end_idx, exit_start_idx, exit_end_idx
+                                )
+
+                        # P6-2: 区分趋势背驰和盘整背驰
+                        if pen_diverged:
+                            bs_type = self.cal_bs_type()
+                            is_trend_bc = (bs_type == '趋势')
+
+                            # 缠论原文验证条件：
+                            # 趋势背驰：离开中枢后背驰（必须先离开中枢，即跌破前中枢ZD）
+                            # 盘整背驰：进入中枢后离开段背驰（需要跌破DD创新低）
+                            buy_valid = False
+                            if is_trend_bc:
+                                # 趋势背驰：检查是否离开前中枢
+                                if len(self.pivot_list) >= 2:
+                                    pre_pivot = self.pivot_list[-2]
+                                    pre_ZD = pre_pivot[2]  # 前中枢下沿
+                                    if cur_fx[1] < pre_ZD:  # 跌破前中枢ZD（离开前中枢）
+                                        buy_valid = True
+                                else:
+                                    # 只有一个中枢，按盘整背驰处理
+                                    if cur_fx[1] < last_pivot[9]:  # 跌破DD
+                                        buy_valid = True
+                            else:
+                                # 盘整背驰：需要跌破DD（创新低）
+                                if cur_fx[1] < last_pivot[9]:
+                                    buy_valid = True
+
+                            if buy_valid:
+                                ts.append([last_fx[2], cur_fx[2]])
+                                if not buy[0]:
+                                    # 区间套验证（作为加分项）
+                                    qjt_confirmed, qjt_pivot_list = self.qjt_turn(last_fx[2], cur_fx[2], 'down')
+                                    qjt_depth = 0 if qjt_confirmed else -1
+
+                                    # 计算置信度
+                                    confidence = 60  # 基础分
+                                    if is_trend_bc:
+                                        confidence += 15  # 趋势背驰加分
+                                    if qjt_confirmed:
+                                        confidence += 15  # 区间套确认加分
+                                    if vol_diverged:
+                                        confidence += 10  # 成交量背驰加分
+
+                                    ChanLog.log(self.freq, self.symbol,
+                                               f'一买确认: {bs_type}, 区间套={qjt_confirmed}, 成交量={vol_diverged}, 置信度={confidence}')
+
                                     buy[0] = [cur_fx[2], cur_fx[1], 'B1', self.k_list[-1].datetime, len(data) - 1, 1,
-                                              None, self.cal_bs_type(), self.cal_b1_strength(cur_fx[1], cur_fx, last_pivot), qjt_pivot_list]
+                                              None, bs_type, confidence, qjt_pivot_list, qjt_depth]
                                     if self.gz:
                                         self.gz_prev_last_bs = self.get_prev_last_bs()
                                         self.gz_tmp_bs = buy
@@ -1156,10 +1307,85 @@ class Chan_Class:
                 sell[2] = [pos_fx[2], pos_fx[0], 'S3', self.k_list[-1].datetime, sell[2][4], 1, None, sell[2][7], None]
                 self.on_buy_sell(sell[2])
 
-    def cal_bs_type(self):
-        if len(self.pivot_list) > 1 and self.pivot_list[-1][4] == self.pivot_list[-2][4]:
+    def cal_bs_type(self, pivot=None):
+        """判断走势类型（趋势/盘整）
+
+        缠论原文（第17课、第20课）：
+        - 趋势定义：连续两个同级别中枢不重叠，且位置同向移动
+        - 上升趋势：前中枢ZG < 当前中枢ZD（中枢不重叠，位置抬高）
+        - 下降趋势：前中枢ZD > 当前中枢ZG（中枢不重叠，位置降低）
+        - 有重叠 = 中枢扩张 = 盘整
+
+        Args:
+            pivot: 指定中枢，默认使用最后两个中枢
+        """
+        if len(self.pivot_list) < 2:
+            return '盘整'
+
+        if pivot is None:
+            pre = self.pivot_list[-2]
+            cur = self.pivot_list[-1]
+        else:
+            idx = self.pivot_list.index(pivot)
+            if idx < 1:
+                return '盘整'
+            pre = self.pivot_list[idx - 1]
+            cur = pivot
+
+        pre_ZD = pre[2]  # 前中枢下沿
+        pre_ZG = pre[3]  # 前中枢上沿
+        cur_ZD = cur[2]  # 当前中枢下沿
+        cur_ZG = cur[3]  # 当前中枢上沿
+
+        # 上升趋势：前中枢ZG < 当前中枢ZD（中枢不重叠，位置抬高）
+        if pre_ZG < cur_ZD:
             return '趋势'
+        # 下降趋势：前中枢ZD > 当前中枢ZG（中枢不重叠，位置降低）
+        if pre_ZD > cur_ZG:
+            return '趋势'
+        # 有重叠 = 中枢扩张 = 盘整
         return '盘整'
+
+    def _check_volume_divergence(self, enter_start_idx, enter_end_idx, exit_start_idx, exit_end_idx):
+        """检查成交量背驰（缠论第12课：量能衰减确认背驰）
+
+        核心逻辑：离开段成交量应小于进入段，表示动能衰竭
+
+        Args:
+            enter_start_idx: 进入段起始K线索引
+            enter_end_idx: 进入段结束K线索引
+            exit_start_idx: 离开段起始K线索引
+            exit_end_idx: 离开段结束K线索引
+
+        Returns:
+            bool: 是否成交量背驰
+        """
+        if not self.k_list or len(self.k_list) < max(enter_end_idx, exit_end_idx) + 1:
+            return False
+
+        # 计算进入段总成交量
+        enter_vol = 0.0
+        for i in range(enter_start_idx, min(enter_end_idx + 1, len(self.k_list))):
+            enter_vol += self.k_list[i].volume
+
+        # 计算离开段总成交量
+        exit_vol = 0.0
+        for i in range(exit_start_idx, min(exit_end_idx + 1, len(self.k_list))):
+            exit_vol += self.k_list[i].volume
+
+        if enter_vol <= 0:
+            return False
+
+        vol_ratio = exit_vol / enter_vol
+
+        # 成交量衰减超过30%才算背驰
+        is_vol_divergence = vol_ratio < 0.7
+
+        ChanLog.log(self.freq, self.symbol,
+                   f'成交量背驰检查: 进入段={enter_vol:.2f}, 离开段={exit_vol:.2f}, '
+                   f'比例={vol_ratio:.2%}, 结果={"背驰" if is_vol_divergence else "非背驰"}')
+
+        return is_vol_divergence
 
     def cal_b1_strength(self, price, cur_fx, last_pivot):
         """
@@ -1204,6 +1430,70 @@ class Chan_Class:
                 return '强'
         return '弱'
 
+    def calculate_stop_loss_target(self, bs_name, pivot, cur_fx):
+        """计算买卖点的止损价和目标价
+
+        参考 engine_new.py _set_stop_loss_target (行3379-3437)
+
+        止损逻辑:
+        - 做多止损：一/二买 = 底分型最低点，三买 = ZD (更宽松)
+        - 做空止损：一/二卖 = 顶分型最高点，三卖 = ZG (更宽松)
+
+        止盈目标:
+        - 一买目标 = ZG, 二买目标 = GG, 三买目标 = GG + 1倍中枢高度
+        - 一卖目标 = ZD, 二卖目标 = DD, 三卖目标 = DD - 1倍中枢高度
+
+        Args:
+            bs_name: 'B1'/'B2'/'B3'/'S1'/'S2'/'S3'
+            pivot: 中枢数据 [date1, date2, ZD, ZG, type, ...]
+            cur_fx: 当前分型 [high, low, datetime, direction, k_index]
+
+        Returns:
+            tuple: (stop_loss, take_profit)
+        """
+        stop_loss = 0.0
+        take_profit = 0.0
+
+        if pivot is None:
+            return stop_loss, take_profit
+
+        ZD = pivot[2]   # 中枢下沿
+        ZG = pivot[3]   # 中枢上沿
+        GG = pivot[8]   # 中枢最高点
+        DD = pivot[9]   # 中枢最低点
+        zs_height = ZG - ZD  # 中枢高度
+
+        if bs_name in ('B1', 'B2', 'B3'):
+            # 做多
+            if bs_name == 'B3':
+                stop_loss = ZD
+                take_profit = GG + zs_height
+            elif bs_name == 'B2':
+                # 二买止损放宽：用ZD（中枢下沿）
+                stop_loss = ZD
+                take_profit = GG + zs_height * 0.5  # 二买目标：GG+0.5倍中枢高度
+            else:
+                # 一买止损：DD（中枢最低点）
+                stop_loss = DD if DD > 0 else (cur_fx[1] if cur_fx else ZD)
+                take_profit = ZG
+
+        elif bs_name in ('S1', 'S2', 'S3'):
+            # 做空
+            if bs_name == 'S3':
+                stop_loss = ZG
+                take_profit = DD - zs_height
+            elif bs_name == 'S2':
+                # 二卖止损放宽：用ZG（中枢上沿）
+                stop_loss = ZG if ZG > 0 else (cur_fx[0] if cur_fx else GG)
+                # 二卖止盈：ZD而非DD，目标更远
+                take_profit = ZD  # 改用中枢下沿
+            else:
+                # 一卖止损：GG（中枢最高点）
+                stop_loss = GG if GG > 0 else (cur_fx[0] if cur_fx else ZG)
+                take_profit = ZD
+
+        return stop_loss, take_profit
+
     def cal_b2_strength(self, price, fx, last_pivot):
         if last_pivot:
             if price > last_pivot[3]:
@@ -1217,11 +1507,11 @@ class Chan_Class:
     def cal_macd(self, start, end):
         """
         计算MACD面积（区分红绿柱）
-        
+
         Args:
             start: 起始K线索引
             end: 结束K线索引
-            
+
         Returns:
             dict: {
                 'total': 总面积（绝对值之和）,
@@ -1250,6 +1540,177 @@ class Chan_Class:
         result['positive'] = round(result['positive'], 4)
         result['negative'] = round(result['negative'], 4)
         return result
+
+    def _get_prev_pivot_leaving_strength(self, cur_pivot, type):
+        """获取前一个中枢的离开段力度（用于趋势背驰比较）
+
+        缠论原文（第24课、第25课）：
+        趋势背驰比较的是：前一个中枢的离开段 vs 当前中枢的离开段
+
+        Args:
+            cur_pivot: 当前中枢
+            type: 'up' 或 'down'（中枢方向）
+
+        Returns:
+            (strength, macd_area, ee_data): 力度、MACD面积、分型数据
+        """
+        if len(self.pivot_list) < 2:
+            return 0.0, 0.0, None
+
+        # 获取前一个中枢
+        idx = self.pivot_list.index(cur_pivot) if cur_pivot in self.pivot_list else len(self.pivot_list) - 1
+        if idx < 1:
+            return 0.0, 0.0, None
+
+        prev_pivot = self.pivot_list[idx - 1]
+        data = self.stroke_list
+
+        # 前中枢离开段 = 前中枢结束位置到前中枢后第一个反向分型
+        prev_exit_time = prev_pivot[1]  # 前中枢结束时间
+
+        # 查找前中枢离开段的分型
+        leaving_start_fx = None
+        leaving_end_fx = None
+        for i, fx in enumerate(data):
+            if fx[2] >= prev_exit_time:
+                if leaving_start_fx is None:
+                    leaving_start_fx = fx
+                elif fx[3] != leaving_start_fx[3]:  # 方向相反
+                    leaving_end_fx = fx
+                    break
+
+        if leaving_start_fx is None or leaving_end_fx is None:
+            return 0.0, 0.0, None
+
+        # 计算力度
+        strength = self._calculate_movement_strength(leaving_start_fx, leaving_end_fx)
+
+        # 计算MACD
+        start_idx = leaving_start_fx[4] if len(leaving_start_fx) > 4 else 0
+        end_idx = leaving_end_fx[4] if len(leaving_end_fx) > 4 else 0
+        macd_info = self.cal_macd(start_idx, end_idx)
+
+        if type == 'down':
+            macd_area = macd_info.get('negative', 0)
+        else:
+            macd_area = macd_info.get('positive', 0)
+
+        ee_data = [[leaving_start_fx, leaving_end_fx]]
+        return strength, macd_area, ee_data
+
+    def _check_leaving_strength_monotonic_decrease(self, cur_pivot, type):
+        """校验趋势背驰的力度单调递减（缠论第33课）
+
+        缠论原文（第33课）：
+        趋势背驰的必要条件：所有离开中枢的笔，其力度必须严格递减。
+        如果中间有任何一笔力度回升（非递减），则背驰不成立。
+
+        Args:
+            cur_pivot: 当前中枢
+            type: 'up' 或 'down'
+
+        Returns:
+            bool: 是否满足力度单调递减
+        """
+        if len(self.pivot_list) < 3:
+            return True  # 中枢数不足，不做校验
+
+        # 收集所有中枢的离开段力度
+        leaving_strengths = []
+        data = self.stroke_list
+
+        for pivot in self.pivot_list:
+            exit_time = pivot[1]  # 中枢结束时间
+            leaving_start_fx = None
+            leaving_end_fx = None
+
+            for fx in data:
+                if fx[2] >= exit_time:
+                    if leaving_start_fx is None:
+                        leaving_start_fx = fx
+                    elif fx[3] != leaving_start_fx[3]:
+                        leaving_end_fx = fx
+                        break
+
+            if leaving_start_fx and leaving_end_fx:
+                s = self._calculate_movement_strength(leaving_start_fx, leaving_end_fx)
+                leaving_strengths.append(s)
+
+        if len(leaving_strengths) < 3:
+            return True  # 离开段不足3段，不做校验
+
+        # 校验力度是否严格递减
+        for i in range(1, len(leaving_strengths)):
+            if leaving_strengths[i] >= leaving_strengths[i - 1]:
+                ChanLog.log(self.freq, self.symbol,
+                           f'力度单调递减校验失败: 第{i}段力度={leaving_strengths[i]:.4f} >= 第{i-1}段力度={leaving_strengths[i-1]:.4f}')
+                return False
+
+        return True
+
+    def _calculate_movement_strength(self, start_fx, end_fx):
+        """计算走势力度（缠论第5课原文定义）
+
+        力度 = 价格幅度 × 0.6 + 斜率 × 0.4
+
+        参考 engine_new.py _calculate_movement_strength (行2959-2987)
+
+        Args:
+            start_fx: 起始分型 [high, low, datetime, direction, k_index]
+            end_fx: 结束分型 [high, low, datetime, direction, k_index]
+
+        Returns:
+            力度值
+        """
+        if start_fx is None or end_fx is None:
+            return 0.0
+
+        # 价格幅度
+        if start_fx[3] == 'down':  # 底分型起始，向上笔
+            price_amplitude = abs(end_fx[0] - start_fx[1])
+        else:  # 顶分型起始，向下笔
+            price_amplitude = abs(end_fx[1] - start_fx[0])
+
+        # 时间效率（斜率）
+        kline_count = max(abs(end_fx[4] - start_fx[4]), 1)
+        slope = price_amplitude / kline_count
+
+        # 综合力度 = 价格幅度 × 0.6 + 斜率 × 0.4
+        strength = price_amplitude * 0.6 + slope * 0.4
+        return max(strength, 1e-10)
+
+    def cal_bs_type(self):
+        """判断当前走势类型（趋势/盘整）
+
+        缠论原文（第17课、第20课）：
+        - 趋势定义：连续两个同级别中枢不重叠，且位置同向移动
+        - 上升趋势：前中枢ZG < 当前中枢ZD（中枢不重叠，位置抬高）
+        - 下降趋势：前中枢ZD > 当前中枢ZG（中枢不重叠，位置降低）
+        - 有重叠 = 中枢扩张 = 盘整
+
+        Returns:
+            str: '趋势' 或 '盘整'
+        """
+        if len(self.pivot_list) < 2:
+            return '盘整'
+
+        # 检查最近两个中枢是否形成趋势
+        pre = self.pivot_list[-2]
+        cur = self.pivot_list[-1]
+
+        pre_ZD = pre[2]  # 前中枢下沿
+        pre_ZG = pre[3]  # 前中枢上沿
+        cur_ZD = cur[2]  # 当前中枢下沿
+        cur_ZG = cur[3]  # 当前中枢上沿
+
+        # 上升趋势：前中枢ZG < 当前中枢ZD（中枢不重叠，位置抬高）
+        if pre_ZG < cur_ZD:
+            return '趋势'
+        # 下降趋势：前中枢ZD > 当前中枢ZG（中枢不重叠，位置降低）
+        if pre_ZD > cur_ZG:
+            return '趋势'
+        # 有重叠 = 中枢扩张 = 盘整
+        return '盘整'
 
     def cal_pen_macd(self, pen_index=None):
         """
@@ -1328,50 +1789,64 @@ class Chan_Class:
         return False
 
     def on_turn(self, start, end, ee_data, type):
-        # ee_data: 笔/段列表 [[start, end]]
-        # 判断背驰
-        start_macd = None
-        if start in self.macd:
-            start_macd = self.macd[start]
-        end_macd = None
-        if end in self.macd:
-            end_macd = self.macd[end]
-        if start_macd and end_macd:
-            # 兼容字典格式和数值格式
-            if isinstance(start_macd, dict):
-                start_macd_val = start_macd.get('total', 0)
-            else:
-                start_macd_val = start_macd
-            if isinstance(end_macd, dict):
-                end_macd_val = end_macd.get('total', 0)
-            else:
-                end_macd_val = end_macd
-                
-            if math.isnan(start_macd_val) or math.isnan(end_macd_val):
-                if len(ee_data) > 1:
-                    if type == 'down':
-                        enter_slope = (ee_data[0][0][0] - ee_data[0][1][1]) / (ee_data[0][1][4] - ee_data[0][0][4] + 1)
-                        exit_slope = (ee_data[1][0][0] - ee_data[1][1][1]) / (ee_data[1][1][4] - ee_data[1][0][4] + 1)
-                        return abs(enter_slope) > abs(exit_slope)
-                    else:
-                        enter_slope = (ee_data[0][0][1] - ee_data[0][1][0]) / (ee_data[0][1][4] - ee_data[0][0][4] + 1)
-                        exit_slope = (ee_data[1][0][1] - ee_data[1][1][0]) / (ee_data[1][1][4] - ee_data[1][0][4] + 1)
-                        return abs(enter_slope) > abs(exit_slope)
-            else:
-                # 核心修改：添加MACD面积缩小比例阈值判断
-                # 背驰条件：离开段面积 / 进入段面积 < 0.4 (缩小至少60%)
-                if start_macd_val > 0:
-                    ratio = end_macd_val / start_macd_val
-                    is_divergence = ratio < self.divergence_ratio_threshold
-                    
-                    # 添加日志，记录背驰判断详情
-                    ChanLog.log(self.freq, self.symbol, 
-                               f'背驰判断: 进入段面积={start_macd_val:.2f}, 离开段面积={end_macd_val:.2f}, '
-                               f'比例={ratio:.2%}, 阈值={self.divergence_ratio_threshold:.2%}, '
-                               f'结果={"背驰" if is_divergence else "非背驰"}')
-                    
-                    return is_divergence
-                return False
+        """背驰判断（MACD面积法 - 简化版）
+
+        缠论第15课、第25课核心定义：
+        - 背驰 = 离开段MACD面积 < 进入段MACD面积
+        - 区分红绿柱：向下比较绿柱，向上比较红柱
+
+        阈值设置（放宽以增加信号）：
+        - 趋势背驰：力度比 < 0.85（面积衰减15%）
+        - 盘整背驰：力度比 < 0.90（面积衰减10%）
+
+        Args:
+            start: 进入段时间
+            end: 离开段时间
+            ee_data: [[进入段起始分型, 进入段结束分型], [离开段起始分型, 离开段结束分型]]
+            type: 'up' 或 'down'（中枢方向）
+
+        Returns:
+            bool: 是否背驰
+        """
+        start_macd = self.macd.get(start, {'total': 0, 'positive': 0, 'negative': 0})
+        end_macd = self.macd.get(end, {'total': 0, 'positive': 0, 'negative': 0})
+
+        # 兼容旧格式
+        if isinstance(start_macd, (int, float)):
+            start_macd = {'total': start_macd, 'positive': start_macd, 'negative': start_macd}
+        if isinstance(end_macd, (int, float)):
+            end_macd = {'total': end_macd, 'positive': end_macd, 'negative': end_macd}
+
+        # 根据方向选择对应颜色的MACD面积
+        if type == 'down':
+            compare_macd = start_macd.get('negative', start_macd.get('total', 0))
+            exit_macd = end_macd.get('negative', end_macd.get('total', 0))
+        else:
+            compare_macd = start_macd.get('positive', start_macd.get('total', 0))
+            exit_macd = end_macd.get('positive', end_macd.get('total', 0))
+
+        # 处理NaN
+        if math.isnan(compare_macd) or math.isnan(exit_macd):
+            return False
+
+        if compare_macd > 0:
+            ratio = exit_macd / compare_macd
+
+            # 区分趋势背驰和盘整背驰
+            bs_type = self.cal_bs_type()
+            is_trend = (bs_type == '趋势')
+
+            # 放宽阈值：趋势0.85，盘整0.90
+            threshold = 0.85 if is_trend else 0.90
+            is_divergence = ratio < threshold
+
+            ChanLog.log(self.freq, self.symbol,
+                       f'背驰判断: 比较={compare_macd:.4f}, 离开={exit_macd:.4f}, '
+                       f'比例={ratio:.2%}, 类型={bs_type}, 阈值={threshold:.0%}, '
+                       f'结果={"背驰" if is_divergence else "非背驰"}')
+
+            return is_divergence
+
         return False
 
     def qjt_turn0(self, start, end, type):
@@ -1447,15 +1922,24 @@ class Chan_Class:
         return chan_pivot.pivot_list
 
     def qjt_turn(self, start, end, type):
-        # 区间套判断背驰：重新形成新的中枢和买卖点
+        """区间套判断背驰（缠论第27课）
+
+        核心要求：高级别背驰段中，低级别必须出现同方向的背驰段才能精确定位。
+
+        Args:
+            start: 背驰段开始时间
+            end: 背驰段结束时间
+            type: 'up' 或 'down'（中枢方向）
+
+        Returns:
+            tuple: (是否确认, 低级别中枢列表)
+        """
         qjt_pivot_list = []
-        # if not self.qjt:
-        #     return True, qjt_pivot_list
         chan = self.next
         if not chan:
             return True, qjt_pivot_list
         ans = True
-        ChanLog.log(self.freq, self.symbol, '区间套判断背驰：')
+        ChanLog.log(self.freq, self.symbol, f'区间套判断背驰: type={type}')
         ChanLog.log(self.freq, self.symbol, self.freq)
 
         while chan:
@@ -1487,15 +1971,24 @@ class Chan_Class:
                         break
             data.reverse()
             chan_pivot_list = chan.qjt_pivot(data, type)
-            ChanLog.log(self.freq, self.symbol, str(self.pivot_list[-1]) + ':' + str(start))
-            ChanLog.log(self.freq, self.symbol, chan_pivot_list)
+            ChanLog.log(self.freq, self.symbol, f'低级别中枢: {chan_pivot_list}')
             qjt_pivot_list.append(chan_pivot_list)
+
+            # 区间套验证（缠论第27课）：一类买卖点必须有背驰段精确定位
+            # 缠论原文：一买一卖是趋势转折点，需要低级别走势配合确认
+
             if chan_pivot_list and len(chan_pivot_list[-1][12]) > 0:
+                # 有背驰段，精确确认（一买一卖的必要条件）
                 ts_item = chan_pivot_list[-1][12][-1]
                 start = ts_item[0]
                 end = ts_item[1]
                 tmp = True
                 chan = chan.next
+                ChanLog.log(self.freq, self.symbol, f'区间套确认(背驰段): ts=[{start}, {end}]')
+            else:
+                # 无背驰段，不允许一买一卖
+                ChanLog.log(self.freq, self.symbol, '区间套未确认: 无背驰段(一买一卖需要背驰段)')
+                tmp = False
 
             ans = tmp and ans
             if not ans:
@@ -1749,25 +2242,47 @@ class Chan_Class:
                     self.trend_list.append([new_pivot[0], new_pivot[1], 'pzup', [], [len(self.pivot_list) - 1]])
 
     def on_buy_sell(self, data, valid=True):
-        """仅记录买卖信号，不执行交易（交易执行逻辑已移至market_open层）"""
+        """仅记录买卖信号，不执行交易（交易执行逻辑已移至market_open层）
+
+        数据结构扩展:
+        - 原有: [日期，值，类型, evaluation_time, 位置索引, valid, invalid_time, 类型, 强弱, qjt_pivot_list, qjt_depth]
+        - 新增: [..., stop_loss, take_profit]
+        """
         if not data:
             return
 
         signal_key = f"{data[3]}_{data[2]}_{data[1]}"
-        
-        ###print(f"key={signal_key}")
-        #print(data)
-        # 买点列表[[日期，值，类型, evaluation_time, 买点位置=index of stroke/line, valid, invalid_time, 类型, 强弱, qjt_pivot_list]]
-        # 卖点列表[[日期，值，类型, evaluation_time, 买点位置=index of stroke/line, valid, invalid_time, 类型, 强弱, qjt_pivot_list]]
+
+        # 买点列表[[日期，值，类型, evaluation_time, 买点位置=index of stroke/line, valid, invalid_time, 类型, 强弱, qjt_pivot_list, qjt_depth, stop_loss, take_profit]]
+        # 卖点列表[[日期，值，类型, evaluation_time, 买点位置=index of stroke/line, valid, invalid_time, 类型, 强弱, qjt_pivot_list, qjt_depth, stop_loss, take_profit]]
         if valid and (signal_key not in self.executed_signals):
+            # 计算止盈止损
+            stop_loss = 0.0
+            take_profit = 0.0
+            if len(data) < 13:
+                last_pivot = self.pivot_list[-1] if self.pivot_list else None
+                cur_fx = None
+                if len(data) > 4 and data[4] < len(self.stroke_list):
+                    cur_fx = self.stroke_list[data[4]]
+                bs_name = data[2]
+                stop_loss, take_profit = self.calculate_stop_loss_target(bs_name, last_pivot, cur_fx)
+                # 扩展数据结构
+                if len(data) == 11:
+                    data.extend([stop_loss, take_profit])
+                elif len(data) == 12:
+                    data.append(take_profit)
+            else:
+                # 已有止盈止损字段
+                if len(data) >= 13:
+                    stop_loss = data[11]
+                    take_profit = data[12]
+
             # 统一记录所有买卖信号，不区分级别（交易执行逻辑在market_open层处理）
             if data[2].startswith('B'):
-                ChanLog.log(self.freq, self.symbol, 'buy signal recorded:')
-                ChanLog.log(self.freq, self.symbol, data)
+                ChanLog.log(self.freq, self.symbol, f'buy signal: {data[2]} SL={stop_loss:.2f} TP={take_profit:.2f}')
                 self.buy_list.append(data)
                 self.executed_signals.add(signal_key)
             elif data[2].startswith('S'):
-                ChanLog.log(self.freq, self.symbol, 'sell signal recorded:')
-                ChanLog.log(self.freq, self.symbol, data)
+                ChanLog.log(self.freq, self.symbol, f'sell signal: {data[2]} SL={stop_loss:.2f} TP={take_profit:.2f}')
                 self.sell_list.append(data)
                 self.executed_signals.add(signal_key)
