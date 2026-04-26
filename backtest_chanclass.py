@@ -537,34 +537,42 @@ def should_trade_signal_chan(signal_name: str, trend_direction: str, strong_tren
             return False, 0.0
 
         # ============================================================
-        # 一买：趋势反转信号（下降→上升）
+        # 一买：下降趋势转折 → 上升趋势起点
         # ============================================================
-        # 缠论原文：一买是下降趋势结束的位置
-        # 区间套验证：30m必须是缠论定义的下降趋势或盘整
-        # 关键：不能用价格动量判断，必须是缠论结构
+        # 缠论原文：一买是下降趋势背驰转折点
+        # 关键理解：一买要有效，需要大级别趋势也出现转折
+        # 区间套验证：
+        #   - 30m下降趋势：一买只是反弹，不是真正的转折（不应交易）
+        #   - 30m上升趋势：一买是逆势回调（不应交易）
+        #   - 30m盘整：一买可能是方向选择（可以尝试）
+        # 结论：一买只在30m盘整中交易，捕捉趋势方向选择
         if signal_name == '1buy':
             if bs_type != '下降趋势':
                 return False, 0.0  # 5m必须下降趋势背驰
-            # 区间套验证：30m不能是缠论上升趋势
-            if trend_30m_type == '上升趋势' and pivot_30m_count >= 2:
-                return False, 0.0  # 30m缠论上升趋势不做一买
-            return True, 1.0
+            # 区间套核心修正：30m必须是盘整状态
+            # 如果30m有明确趋势（上升或下降），一买不是真正的转折点
+            if pivot_30m_count >= 2 and trend_30m_type != '盘整':
+                return False, 0.0  # 30m有明确趋势，不做一买
+            return True, 1.0  # 30m盘整或无明确趋势，可以尝试
 
         # ============================================================
-        # 一卖：趋势反转信号（上升→下降）
+        # 一卖：上升趋势转折 → 下降趋势起点
         # ============================================================
-        # 缠论原文：一卖是上升趋势结束的位置
-        # 区间套验证：30m必须是缠论定义的上升趋势（至少2个中枢）
-        # 关键：必须有缠论趋势结构，不能仅靠价格动量
+        # 缠论原文：一卖是上升趋势背驰转折点
+        # 关键理解：一卖要有效，需要大级别趋势也出现转折
+        # 区间套验证：
+        #   - 30m上升趋势：一卖只是回调，不是真正的转折（不应交易）
+        #   - 30m下降趋势：一卖是逆势反弹（不应交易）
+        #   - 30m盘整：一卖可能是方向选择（可以尝试）
+        # 结论：一卖只在30m盘整中交易，捕捉趋势方向选择
         if signal_name == '1sell':
             if bs_type != '上升趋势':
                 return False, 0.0  # 5m必须上升趋势背驰
-            # 区间套核心：30m必须也是缠论上升趋势（至少2个中枢）
-            if pivot_30m_count < 2:
-                return False, 0.0  # 30m中枢不足，无缠论趋势结构
-            if trend_30m_type != '上升趋势':
-                return False, 0.0  # 30m不是缠论上升趋势
-            return True, 1.0
+            # 区间套核心修正：30m必须是盘整状态
+            # 如果30m有明确趋势（上升或下降），一卖不是真正的转折点
+            if pivot_30m_count >= 2 and trend_30m_type != '盘整':
+                return False, 0.0  # 30m有明确趋势，不做一卖
+            return True, 1.0  # 30m盘整或无明确趋势，可以尝试
 
     # === 二类买卖点：顺势交易核心 ===
     # 缠论原文第17课：二买是一买后的再次介入
@@ -819,13 +827,9 @@ def run_backtest(days: int = 5, start_date: Optional[str] = None, end_date: Opti
             "volume": bar.volume,
         }
 
-        # 记录喂入前的信号数量（根据操作级别）
-        if operating_level == "1m":
-            prev_buy_len = len(chan_1m.buy_list)
-            prev_sell_len = len(chan_1m.sell_list)
-        else:
-            prev_buy_len = len(chan_5m.buy_list)
-            prev_sell_len = len(chan_5m.sell_list)
+        # 记录喂入前的信号数量
+        prev_buy_len = len(chan_5m.buy_list)
+        prev_sell_len = len(chan_5m.sell_list)
 
         # 喂入各级别
         # 1分钟级别（每根都喂）
