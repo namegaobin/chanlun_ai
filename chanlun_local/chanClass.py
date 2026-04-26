@@ -823,20 +823,24 @@ class Chan_Class:
 
                             # 调试日志：分析一卖为什么没生成
                             pivot_GG = last_pivot[8] if len(last_pivot) > 8 else last_pivot[3]
+                            pivot_ZG = last_pivot[3]
                             ChanLog.log(self.freq, self.symbol,
-                                       f'背驰触发: 类型={bs_type}, cur_fx_high={cur_fx[0]:.2f}, GG={pivot_GG:.2f}, 满足趋势={is_trend_bc}, 突破GG={cur_fx[0] > pivot_GG}')
+                                       f'背驰触发: 类型={bs_type}, cur_fx_high={cur_fx[0]:.2f}, ZG={pivot_ZG:.2f}, GG={pivot_GG:.2f}')
 
                             # ============================================================
-                            # 缠论原文价格条件（第24课、第25课）
+                            # 缠论原文价格条件（第24课、第29课）- 放宽条件
                             # ============================================================
-                            # 趋势背驰一卖：价格必须突破GG（中枢最高点），触及也算
-                            # 盘整背驰不产生一卖（缠论原文：转折力度弱，风险大）
+                            # 趋势背驰一卖：价格突破GG或回到中枢范围内
+                            # 盘整背驰一卖：价格回到中枢范围内即可（置信度较低）
                             sell_valid = False
                             if is_trend_bc:
-                                # 一卖需要突破中枢最高点GG（触及也算）
-                                if cur_fx[0] >= pivot_GG:  # 突破或触及GG
+                                # 趋势背驰：突破GG或触及ZG都算
+                                if cur_fx[0] >= pivot_GG or cur_fx[0] >= pivot_ZG:
                                     sell_valid = True
-                            # 下降趋势不产生一卖（方向不匹配）
+                            else:
+                                # 盘整背驰：价格回到中枢范围内即可
+                                if cur_fx[0] >= last_pivot[2]:  # 不低于ZD
+                                    sell_valid = True
 
                             if sell_valid:
                                 ts.append([last_fx[2], cur_fx[2]])
@@ -879,7 +883,8 @@ class Chan_Class:
                                         sell[0] = []
 
                         if cur_fx[0] < last_pivot[2] and not sell[2] and not buy[0]:
-                            # 形成三卖
+                            # 形成三卖：反弹笔最高点严格低于ZD（不允许触及）
+                            # 缠论原文第20课：三卖是"反弹不破ZD"，触及则不是三卖
                             ans, qjt_pivot_list = self.qjt_trend(last_fx[2], cur_fx[2], 'up')
                             if ans:
                                 condition = len(data) > 2 and data[-3][0] < last_pivot[2] and data[-3][2] > last_pivot[
@@ -976,20 +981,24 @@ class Chan_Class:
 
                             # 调试日志：分析一买为什么没生成
                             pivot_DD = last_pivot[9] if len(last_pivot) > 9 else last_pivot[2]
+                            pivot_ZD = last_pivot[2]
                             ChanLog.log(self.freq, self.symbol,
-                                       f'背驰触发: 类型={bs_type}, cur_fx_low={cur_fx[1]:.2f}, DD={pivot_DD:.2f}, 满足趋势={is_trend_bc}, 跌破DD={cur_fx[1] < pivot_DD}')
+                                       f'背驰触发: 类型={bs_type}, cur_fx_low={cur_fx[1]:.2f}, ZD={pivot_ZD:.2f}, DD={pivot_DD:.2f}')
 
                             # ============================================================
-                            # 缠论原文价格条件（第24课、第25课）
+                            # 缠论原文价格条件（第24课、第29课）- 放宽条件
                             # ============================================================
-                            # 趋势背驰一买：价格必须跌破DD（中枢最低点），触及也算
-                            # 盘整背驰不产生一买（缠论原文：转折力度弱，风险大）
+                            # 趋势背驰一买：价格跌破DD或回到中枢范围内
+                            # 盘整背驰一买：价格回到中枢范围内即可（置信度较低）
                             buy_valid = False
                             if is_trend_bc:
-                                # 一买需要跌破中枢最低点DD（触及也算）
-                                if cur_fx[1] <= pivot_DD:  # 跌破或触及DD
+                                # 趋势背驰：跌破DD或触及ZD都算
+                                if cur_fx[1] <= pivot_DD or cur_fx[1] <= pivot_ZD:
                                     buy_valid = True
-                            # 上升趋势不产生一买（方向不匹配）
+                            else:
+                                # 盘整背驰：价格回到中枢范围内即可
+                                if cur_fx[1] <= last_pivot[3]:  # 不超过ZG
+                                    buy_valid = True
 
                             if buy_valid:
                                 ts.append([last_fx[2], cur_fx[2]])
@@ -1058,7 +1067,8 @@ class Chan_Class:
                                     self.on_buy_sell(buy[1])
 
                         if cur_fx[1] > last_pivot[3] and not buy[2] and not sell[0]:
-                            # 形成三买
+                            # 形成三买：回调笔最低点严格高于ZG（不允许触及）
+                            # 缠论原文第20课：三买是"回调不破ZG"，触及则不是三买
                             ans, qjt_pivot_list = self.qjt_trend(last_fx[2], cur_fx[2], 'down')
                             if ans:
                                 condition = len(data) > 2 and data[-3][1] > last_pivot[3] and data[-3][2] > \
@@ -1334,6 +1344,9 @@ class Chan_Class:
 
         Args:
             pivot: 指定中枢，默认使用最后两个中枢
+
+        Returns:
+            str: '上升趋势'、'下降趋势' 或 '盘整'
         """
         if len(self.pivot_list) < 2:
             return '盘整'
@@ -1355,10 +1368,19 @@ class Chan_Class:
 
         # 上升趋势：前中枢ZG < 当前中枢ZD（中枢不重叠，位置抬高）
         if pre_ZG < cur_ZD:
-            return '趋势'
+            return '上升趋势'
         # 下降趋势：前中枢ZD > 当前中枢ZG（中枢不重叠，位置降低）
         if pre_ZD > cur_ZG:
-            return '趋势'
+            return '下降趋势'
+
+        # 放宽趋势：中枢位置同向移动（允许部分重叠）
+        # 上升趋势：前中枢ZG < 当前中枢ZG（位置抬高）
+        if pre_ZG < cur_ZG and pre_ZD < cur_ZD:
+            return '上升趋势'
+        # 下降趋势：前中枢ZD > 当前中枢ZD（位置降低）
+        if pre_ZD > cur_ZD and pre_ZG > cur_ZG:
+            return '下降趋势'
+
         # 有重叠 = 中枢扩张 = 盘整
         return '盘整'
 
@@ -1684,51 +1706,6 @@ class Chan_Class:
         # 综合力度 = 价格幅度 × 0.6 + 斜率 × 0.4
         strength = price_amplitude * 0.6 + slope * 0.4
         return max(strength, 1e-10)
-
-    def cal_bs_type(self):
-        """判断当前走势类型（趋势/盘整）
-
-        缠论原文（第17课、第20课）：
-        - 趋势定义：连续两个同级别中枢不重叠，且位置同向移动
-        - 上升趋势：前中枢ZG < 当前中枢ZD（中枢不重叠，位置抬高）
-        - 下降趋势：前中枢ZD > 当前中枢ZG（中枢不重叠，位置降低）
-        - 有重叠 = 中枢扩张 = 盘整
-
-        放宽条件：中枢只要位置同向移动也算趋势（允许部分重叠）
-
-        Returns:
-            str: '上升趋势'、'下降趋势' 或 '盘整'
-        """
-        if len(self.pivot_list) < 2:
-            return '盘整'
-
-        # 检查最近两个中枢是否形成趋势
-        pre = self.pivot_list[-2]
-        cur = self.pivot_list[-1]
-
-        pre_ZD = pre[2]  # 前中枢下沿
-        pre_ZG = pre[3]  # 前中枢上沿
-        cur_ZD = cur[2]  # 当前中枢下沿
-        cur_ZG = cur[3]  # 当前中枢上沿
-
-        # 严格趋势：中枢完全不重叠
-        # 上升趋势：前中枢ZG < 当前中枢ZD
-        if pre_ZG < cur_ZD:
-            return '上升趋势'
-        # 下降趋势：前中枢ZD > 当前中枢ZG
-        if pre_ZD > cur_ZG:
-            return '下降趋势'
-
-        # 放宽趋势：中枢位置同向移动（允许部分重叠）
-        # 上升趋势：前中枢ZG < 当前中枢ZG（位置抬高）
-        if pre_ZG < cur_ZG and pre_ZD < cur_ZD:
-            return '上升趋势'
-        # 下降趋势：前中枢ZD > 当前中枢ZD（位置降低）
-        if pre_ZD > cur_ZD and pre_ZG > cur_ZG:
-            return '下降趋势'
-
-        # 有重叠且位置非同向 = 盘整
-        return '盘整'
 
     def cal_pen_macd(self, pen_index=None):
         """

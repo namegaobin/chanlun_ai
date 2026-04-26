@@ -297,8 +297,9 @@ def calc_stop_take_from_signal(
     if direction == "long":
         # ===== 做多止损计算 =====
         if signal_type == 'B1':
-            # 一买：止损设在底分型低点
-            stop_loss = signal_price * (1 - 0.005)  # 底分型低点下方0.5%
+            # 一买：止损设在中枢DD（缠论原文第100-102课）
+            # 缠师明确说：一买止损是"底分型最低点"，实盘可用中枢DD
+            stop_loss = DD * 0.995 if DD and DD > 0 else signal_price * (1 - min_stop_pct)
         elif signal_type == 'B2':
             # 二买：止损设在一买低点
             stop_loss = signal_price * (1 - 0.003)
@@ -529,50 +530,44 @@ def should_trade_signal_chan(signal_name: str, trend_direction: str, strong_tren
     is_buy = 'buy' in signal_name
     is_first_class = signal_name in ('1buy', '1sell')
 
-    # === 一类买卖点：必须趋势背驰 ===
-    # 缠论原文第24课：一买必须下降趋势背驰，一卖必须上升趋势背驰
+    # === 一类买卖点：趋势转折信号（缠论原文第24课、第27课）===
+    # 缠论核心：一类买卖点是趋势转折点，应捕捉30m级别趋势转折
     if is_first_class:
         # 置信度阈值85（区间套+成交量背驰确认）
         if confidence < 85:
             return False, 0.0
 
         # ============================================================
-        # 一买：下降趋势转折 → 上升趋势起点
+        # 一买：下降趋势转折向上（缠论原文：下降趋势背驰转折点）
         # ============================================================
-        # 缠论原文：一买是下降趋势背驰转折点
-        # 关键理解：一买要有效，需要大级别趋势也出现转折
-        # 区间套验证：
-        #   - 30m下降趋势：一买只是反弹，不是真正的转折（不应交易）
-        #   - 30m上升趋势：一买是逆势回调（不应交易）
-        #   - 30m盘整：一买可能是方向选择（可以尝试）
-        # 结论：一买只在30m盘整中交易，捕捉趋势方向选择
+        # 区间套核心（第27课）：
+        #   - 30m下降趋势：一买是顺势转折信号（高置信）
+        #   - 30m盘整：方向选择（正常仓位）
+        #   - 30m上升趋势：一买是逆势回调，风险较高
         if signal_name == '1buy':
             if bs_type != '下降趋势':
                 return False, 0.0  # 5m必须下降趋势背驰
-            # 区间套核心修正：30m必须是盘整状态
-            # 如果30m有明确趋势（上升或下降），一买不是真正的转折点
-            if pivot_30m_count >= 2 and trend_30m_type != '盘整':
-                return False, 0.0  # 30m有明确趋势，不做一买
-            return True, 1.0  # 30m盘整或无明确趋势，可以尝试
+            # 30m下降趋势或盘整时允许一买（捕捉趋势转折）
+            if trend_30m_type in ('下降趋势', '盘整'):
+                return True, 1.0
+            # 30m上升趋势时，一买是逆势回调，不交易
+            return False, 0.0
 
         # ============================================================
-        # 一卖：上升趋势转折 → 下降趋势起点
+        # 一卖：上升趋势转折向下（缠论原文：上升趋势背驰转折点）
         # ============================================================
-        # 缠论原文：一卖是上升趋势背驰转折点
-        # 关键理解：一卖要有效，需要大级别趋势也出现转折
-        # 区间套验证：
-        #   - 30m上升趋势：一卖只是回调，不是真正的转折（不应交易）
-        #   - 30m下降趋势：一卖是逆势反弹（不应交易）
-        #   - 30m盘整：一卖可能是方向选择（可以尝试）
-        # 结论：一卖只在30m盘整中交易，捕捉趋势方向选择
+        # 区间套核心（第27课）：
+        #   - 30m上升趋势：一卖是顺势转折信号（高置信）
+        #   - 30m盘整：方向选择（正常仓位）
+        #   - 30m下降趋势：一卖是逆势反弹，风险较高
         if signal_name == '1sell':
             if bs_type != '上升趋势':
                 return False, 0.0  # 5m必须上升趋势背驰
-            # 区间套核心修正：30m必须是盘整状态
-            # 如果30m有明确趋势（上升或下降），一卖不是真正的转折点
-            if pivot_30m_count >= 2 and trend_30m_type != '盘整':
-                return False, 0.0  # 30m有明确趋势，不做一卖
-            return True, 1.0  # 30m盘整或无明确趋势，可以尝试
+            # 30m上升趋势或盘整时允许一卖（捕捉趋势转折）
+            if trend_30m_type in ('上升趋势', '盘整'):
+                return True, 1.0
+            # 30m下降趋势时，一卖是逆势反弹，不交易
+            return False, 0.0
 
     # === 二类买卖点：顺势交易核心 ===
     # 缠论原文第17课：二买是一买后的再次介入
@@ -1102,9 +1097,9 @@ def run_backtest(days: int = 5, start_date: Optional[str] = None, end_date: Opti
                         if confidence < threshold:
                             signal_record["filter_reason"] = f"一{('买' if signal_name == '1buy' else '卖')}置信度{confidence:.0f}<{threshold}(需区间套+成交量背驰确认)"
                         else:
-                            # 明确说明趋势方向不匹配
+                            # 明确说明趋势方向不匹配（使用缠论结构趋势）
                             required_trend = '下降趋势' if signal_name == '1buy' else '上升趋势'
-                            signal_record["filter_reason"] = f"一{('买' if signal_name == '1buy' else '卖')}需要{required_trend}(30m={trend_direction_cache},5m={bs_type})"
+                            signal_record["filter_reason"] = f"一{('买' if signal_name == '1buy' else '卖')}需要{required_trend}(30m={trend_30m_type},5m={bs_type})"
                     else:
                         signal_record["filter_reason"] = f"趋势过滤({trend_direction_cache}不做{signal_name},强趋势={strong_trend})"
                     signal_record["filtered"] = True
