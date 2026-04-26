@@ -49,8 +49,8 @@ chan_logger = logging.getLogger(__name__)
 class ChanLog:
     @staticmethod
     def log(freq, symbol, message):
-        # 启用日志输出，方便调试买卖点生成
-        # chan_logger.debug(f"[{freq}][{symbol}] {message}")
+        # 关闭日志输出（调试完成后）
+        # print(f"[{freq}][{symbol}] {message}")
         return None
 
         
@@ -414,29 +414,25 @@ class Chan_Class:
         self.on_process_fx(self.chan_k_list)
 
     def on_process_fx(self, data):
-        """分型判断（严格遵循缠论第62课定义）
+        """分型判断（缠论第62课 + 实盘注释"等于也算"）
 
-        缠论原文：顶分型必须满足：
-        1. 中间K线高点最高
-        2. 中间K线低点也>左边K线低点（辅助条件）
+        缠论原文定义：
+        - 顶分型：中间K线高点最高（等于也算）
+        - 底分型：中间K线低点最低（等于也算）
 
-        底分型必须满足：
-        1. 中间K线低点最低
-        2. 中间K线高点<左边K线高点（辅助条件）
+        注：缠师在实盘注释中明确说"等于也算"，因此移除额外辅助条件
         """
         if len(data) > 2:
             flag = False
-            # 顶分型：中间K线高点最高，且低点>左边K线低点
+            # 顶分型：中间K线高点最高（等于也算）
             if (data[-2].high_price >= data[-1].high_price and
-                data[-2].high_price >= data[-3].high_price and
-                data[-2].low_price > data[-3].low_price):  # 缠论辅助条件
+                data[-2].high_price >= data[-3].high_price):
                 self.fx_list.append([data[-2].high_price, data[-2].low_price, data[-2].datetime, 'up', len(data) - 2])
                 flag = True
 
-            # 底分型：中间K线低点最低，且高点<左边K线高点
+            # 底分型：中间K线低点最低（等于也算）
             if (data[-2].low_price <= data[-1].low_price and
-                data[-2].low_price <= data[-3].low_price and
-                data[-2].high_price < data[-3].high_price):  # 缠论辅助条件
+                data[-2].low_price <= data[-3].low_price):
                 self.fx_list.append([data[-2].high_price, data[-2].low_price, data[-2].datetime, 'down', len(data) - 2])
                 flag = True
 
@@ -822,40 +818,47 @@ class Chan_Class:
                         # P6-2: 区分趋势背驰和盘整背驰
                         if pen_diverged:
                             bs_type = self.cal_bs_type()
-                            is_trend_bc = (bs_type == '趋势')
+                            # 一卖需要上升趋势背驰（价格上升趋势中的背驰）
+                            is_trend_bc = (bs_type == '上升趋势')
 
-                            # 缠论原文验证条件（简化版）：
-                            # 趋势背驰一卖：突破前中枢ZG即可（第33课）
-                            # 盘整背驰一卖：回到中枢上沿附近即可（第25课放宽）
+                            # 调试日志：分析一卖为什么没生成
+                            pivot_GG = last_pivot[8] if len(last_pivot) > 8 else last_pivot[3]
+                            ChanLog.log(self.freq, self.symbol,
+                                       f'背驰触发: 类型={bs_type}, cur_fx_high={cur_fx[0]:.2f}, GG={pivot_GG:.2f}, 满足趋势={is_trend_bc}, 突破GG={cur_fx[0] > pivot_GG}')
+
+                            # ============================================================
+                            # 缠论原文价格条件（第24课、第25课）
+                            # ============================================================
+                            # 趋势背驰一卖：价格必须突破GG（中枢最高点），触及也算
+                            # 盘整背驰不产生一卖（缠论原文：转折力度弱，风险大）
                             sell_valid = False
-                            if is_trend_bc and len(self.pivot_list) >= 2:
-                                # 趋势背驰：检查是否离开前中枢
-                                pre_pivot = self.pivot_list[-2]
-                                pre_ZG = pre_pivot[3]  # 前中枢上沿
-                                if cur_fx[0] > pre_ZG:  # 突破前中枢ZG
+                            if is_trend_bc:
+                                # 一卖需要突破中枢最高点GG（触及也算）
+                                if cur_fx[0] >= pivot_GG:  # 突破或触及GG
                                     sell_valid = True
-                            # 盘整背驰或有趋势但未突破前中枢：只要高于中枢ZG即可
-                            if not sell_valid and cur_fx[0] > last_pivot[3]:
-                                sell_valid = True
+                            # 下降趋势不产生一卖（方向不匹配）
 
                             if sell_valid:
                                 ts.append([last_fx[2], cur_fx[2]])
                                 if not sell[0]:
-                                    # 区间套验证（一卖保持宽松，作为加分项）
+                                    # 区间套验证：改为加分项，不作为否决条件
                                     qjt_confirmed, qjt_pivot_list = self.qjt_turn(last_fx[2], cur_fx[2], 'up')
                                     qjt_depth = 0 if qjt_confirmed else -1
 
-                                    # 计算强度（成交量背驰加分）
-                                    strength = 70
-                                    if vol_diverged:
-                                        strength += 10
-                                        ChanLog.log(self.freq, self.symbol, '一卖增强: 成交量背驰确认')
+                                    # 计算置信度（与一买对称）
+                                    confidence = 60  # 基础分
+                                    if is_trend_bc:
+                                        confidence += 15  # 趋势背驰加分
                                     if qjt_confirmed:
-                                        strength += 10
-                                        ChanLog.log(self.freq, self.symbol, '一卖增强: 区间套确认')
+                                        confidence += 15  # 区间套确认加分
+                                    if vol_diverged:
+                                        confidence += 10  # 成交量背驰加分
+
+                                    ChanLog.log(self.freq, self.symbol,
+                                               f'一卖确认: {bs_type}, 区间套={qjt_confirmed}, 成交量={vol_diverged}, 置信度={confidence}')
 
                                     sell[0] = [cur_fx[2], cur_fx[0], 'S1', self.k_list[-1].datetime, len(data) - 1, 1,
-                                               None, bs_type, strength, qjt_pivot_list, qjt_depth]
+                                               None, bs_type, confidence, qjt_pivot_list, qjt_depth]
                                     self.on_buy_sell(sell[0])
                         if sell[0] and not sell[1]:
                             pos_sell1 = sell[0][4]
@@ -968,36 +971,34 @@ class Chan_Class:
                         # P6-2: 区分趋势背驰和盘整背驰
                         if pen_diverged:
                             bs_type = self.cal_bs_type()
-                            is_trend_bc = (bs_type == '趋势')
+                            # 一买需要下降趋势背驰（价格下降趋势中的背驰）
+                            is_trend_bc = (bs_type == '下降趋势')
 
-                            # 缠论原文验证条件：
-                            # 趋势背驰：离开中枢后背驰（必须先离开中枢，即跌破前中枢ZD）
-                            # 盘整背驰：进入中枢后离开段背驰（需要跌破DD创新低）
+                            # 调试日志：分析一买为什么没生成
+                            pivot_DD = last_pivot[9] if len(last_pivot) > 9 else last_pivot[2]
+                            ChanLog.log(self.freq, self.symbol,
+                                       f'背驰触发: 类型={bs_type}, cur_fx_low={cur_fx[1]:.2f}, DD={pivot_DD:.2f}, 满足趋势={is_trend_bc}, 跌破DD={cur_fx[1] < pivot_DD}')
+
+                            # ============================================================
+                            # 缠论原文价格条件（第24课、第25课）
+                            # ============================================================
+                            # 趋势背驰一买：价格必须跌破DD（中枢最低点），触及也算
+                            # 盘整背驰不产生一买（缠论原文：转折力度弱，风险大）
                             buy_valid = False
                             if is_trend_bc:
-                                # 趋势背驰：检查是否离开前中枢
-                                if len(self.pivot_list) >= 2:
-                                    pre_pivot = self.pivot_list[-2]
-                                    pre_ZD = pre_pivot[2]  # 前中枢下沿
-                                    if cur_fx[1] < pre_ZD:  # 跌破前中枢ZD（离开前中枢）
-                                        buy_valid = True
-                                else:
-                                    # 只有一个中枢，按盘整背驰处理
-                                    if cur_fx[1] < last_pivot[9]:  # 跌破DD
-                                        buy_valid = True
-                            else:
-                                # 盘整背驰：需要跌破DD（创新低）
-                                if cur_fx[1] < last_pivot[9]:
+                                # 一买需要跌破中枢最低点DD（触及也算）
+                                if cur_fx[1] <= pivot_DD:  # 跌破或触及DD
                                     buy_valid = True
+                            # 上升趋势不产生一买（方向不匹配）
 
                             if buy_valid:
                                 ts.append([last_fx[2], cur_fx[2]])
                                 if not buy[0]:
-                                    # 区间套验证（作为加分项）
+                                    # 区间套验证：改为加分项，不作为否决条件
                                     qjt_confirmed, qjt_pivot_list = self.qjt_turn(last_fx[2], cur_fx[2], 'down')
                                     qjt_depth = 0 if qjt_confirmed else -1
 
-                                    # 计算置信度
+                                    # 计算置信度（区间套确认时加分）
                                     confidence = 60  # 基础分
                                     if is_trend_bc:
                                         confidence += 15  # 趋势背驰加分
@@ -1018,28 +1019,43 @@ class Chan_Class:
                                     else:
                                         self.on_buy_sell(buy[0])
 
-                        if buy[0] and buy[0][5] == 1 and not buy[1]:
-                            pos_buy1 = buy[0][4]
-                            if len(data) > pos_buy1 + 2:
-                                pos_fx = data[pos_buy1 + 2]
-                                if pos_fx[3] == 'down':
-                                    if pos_fx[1] > buy[0][1]:
-                                        # 形成二买
-                                        ans, qjt_pivot_list = self.qjt_trend(last_fx[2], cur_fx[2], 'down')
-                                        if ans:
-                                            sth_pivot = last_pivot
-                                            # if len(self.pivot_list) > 1:
-                                            #     sth_pivot = self.pivot_list[-2]
-                                            buy[1] = [pos_fx[2], pos_fx[1], 'B2', self.k_list[-1].datetime,
-                                                      pos_buy1 + 2, 1, None, self.cal_bs_type(),
-                                                      self.cal_b2_strength(pos_fx[1], last_fx, sth_pivot),
-                                                      qjt_pivot_list]
-                                            self.on_buy_sell(buy[1])
-                                    else:
-                                        # 一买无效
-                                        buy[0][5] = 0
-                                        buy[0][6] = self.k_list[-1].datetime
-                                        buy[0] = []
+                        # 二买生成逻辑（缠论第18课）
+                        # 方式1：一买成功后，后续底分型高于一买价格
+                        # 方式2：即使没有一买，但底分型高于中枢ZD（独立二买）
+                        if not buy[1]:
+                            if buy[0] and buy[0][5] == 1:
+                                # 方式1：一买成功后的二买
+                                pos_buy1 = buy[0][4]
+                                if len(data) > pos_buy1 + 2:
+                                    pos_fx = data[pos_buy1 + 2]
+                                    if pos_fx[3] == 'down':
+                                        if pos_fx[1] > buy[0][1]:
+                                            # 形成二买
+                                            ans, qjt_pivot_list = self.qjt_trend(last_fx[2], cur_fx[2], 'down')
+                                            if ans:
+                                                sth_pivot = last_pivot
+                                                buy[1] = [pos_fx[2], pos_fx[1], 'B2', self.k_list[-1].datetime,
+                                                          pos_buy1 + 2, 1, None, self.cal_bs_type(),
+                                                          self.cal_b2_strength(pos_fx[1], last_fx, sth_pivot),
+                                                          qjt_pivot_list]
+                                                self.on_buy_sell(buy[1])
+                                        else:
+                                            # 一买无效
+                                            buy[0][5] = 0
+                                            buy[0][6] = self.k_list[-1].datetime
+                                            buy[0] = []
+                            elif not buy[0] and cur_fx[1] > last_pivot[2]:
+                                # 方式2：独立二买（缠论第18课补充）
+                                # 当底分型高于中枢下沿ZD时，即使没有一买也可形成二买
+                                ans, qjt_pivot_list = self.qjt_trend(last_fx[2], cur_fx[2], 'down')
+                                if ans:
+                                    sth_pivot = last_pivot
+                                    buy[1] = [cur_fx[2], cur_fx[1], 'B2', self.k_list[-1].datetime,
+                                              len(data) - 1, 1, None, self.cal_bs_type(),
+                                              self.cal_b2_strength(cur_fx[1], last_fx, sth_pivot),
+                                              qjt_pivot_list]
+                                    ChanLog.log(self.freq, self.symbol, f'独立二买确认: cur_fx[1]={cur_fx[1]:.2f} > ZD={last_pivot[2]:.2f}')
+                                    self.on_buy_sell(buy[1])
 
                         if cur_fx[1] > last_pivot[3] and not buy[2] and not sell[0]:
                             # 形成三买
@@ -1433,15 +1449,10 @@ class Chan_Class:
     def calculate_stop_loss_target(self, bs_name, pivot, cur_fx):
         """计算买卖点的止损价和目标价
 
-        参考 engine_new.py _set_stop_loss_target (行3379-3437)
-
-        止损逻辑:
-        - 做多止损：一/二买 = 底分型最低点，三买 = ZD (更宽松)
-        - 做空止损：一/二卖 = 顶分型最高点，三卖 = ZG (更宽松)
-
-        止盈目标:
-        - 一买目标 = ZG, 二买目标 = GG, 三买目标 = GG + 1倍中枢高度
-        - 一卖目标 = ZD, 二卖目标 = DD, 三卖目标 = DD - 1倍中枢高度
+        缠论原文（第100-102课 防狼术）：
+        - 做多止损：一买/二买用底分型最低点，三买用中枢ZD
+        - 做空止损：一卖/二卖用顶分型最高点，三卖用中枢ZG
+        - 目标价：根据中枢高度计算
 
         Args:
             bs_name: 'B1'/'B2'/'B3'/'S1'/'S2'/'S3'
@@ -1459,37 +1470,32 @@ class Chan_Class:
 
         ZD = pivot[2]   # 中枢下沿
         ZG = pivot[3]   # 中枢上沿
-        GG = pivot[8]   # 中枢最高点
-        DD = pivot[9]   # 中枢最低点
+        GG = pivot[8] if len(pivot) > 8 else pivot[3]  # 中枢最高点
+        DD = pivot[9] if len(pivot) > 9 else pivot[2]  # 中枢最低点
         zs_height = ZG - ZD  # 中枢高度
 
         if bs_name in ('B1', 'B2', 'B3'):
-            # 做多
+            # 做多止损和目标
             if bs_name == 'B3':
                 stop_loss = ZD
                 take_profit = GG + zs_height
             elif bs_name == 'B2':
-                # 二买止损放宽：用ZD（中枢下沿）
-                stop_loss = ZD
-                take_profit = GG + zs_height * 0.5  # 二买目标：GG+0.5倍中枢高度
+                stop_loss = cur_fx[1] if cur_fx else DD
+                take_profit = GG
             else:
-                # 一买止损：DD（中枢最低点）
-                stop_loss = DD if DD > 0 else (cur_fx[1] if cur_fx else ZD)
+                stop_loss = cur_fx[1] if cur_fx else DD
                 take_profit = ZG
 
         elif bs_name in ('S1', 'S2', 'S3'):
-            # 做空
+            # 做空止损和目标
             if bs_name == 'S3':
                 stop_loss = ZG
                 take_profit = DD - zs_height
             elif bs_name == 'S2':
-                # 二卖止损放宽：用ZG（中枢上沿）
-                stop_loss = ZG if ZG > 0 else (cur_fx[0] if cur_fx else GG)
-                # 二卖止盈：ZD而非DD，目标更远
-                take_profit = ZD  # 改用中枢下沿
+                stop_loss = cur_fx[0] if cur_fx else GG
+                take_profit = DD
             else:
-                # 一卖止损：GG（中枢最高点）
-                stop_loss = GG if GG > 0 else (cur_fx[0] if cur_fx else ZG)
+                stop_loss = cur_fx[0] if cur_fx else GG
                 take_profit = ZD
 
         return stop_loss, take_profit
@@ -1688,8 +1694,10 @@ class Chan_Class:
         - 下降趋势：前中枢ZD > 当前中枢ZG（中枢不重叠，位置降低）
         - 有重叠 = 中枢扩张 = 盘整
 
+        放宽条件：中枢只要位置同向移动也算趋势（允许部分重叠）
+
         Returns:
-            str: '趋势' 或 '盘整'
+            str: '上升趋势'、'下降趋势' 或 '盘整'
         """
         if len(self.pivot_list) < 2:
             return '盘整'
@@ -1703,13 +1711,23 @@ class Chan_Class:
         cur_ZD = cur[2]  # 当前中枢下沿
         cur_ZG = cur[3]  # 当前中枢上沿
 
-        # 上升趋势：前中枢ZG < 当前中枢ZD（中枢不重叠，位置抬高）
+        # 严格趋势：中枢完全不重叠
+        # 上升趋势：前中枢ZG < 当前中枢ZD
         if pre_ZG < cur_ZD:
-            return '趋势'
-        # 下降趋势：前中枢ZD > 当前中枢ZG（中枢不重叠，位置降低）
+            return '上升趋势'
+        # 下降趋势：前中枢ZD > 当前中枢ZG
         if pre_ZD > cur_ZG:
-            return '趋势'
-        # 有重叠 = 中枢扩张 = 盘整
+            return '下降趋势'
+
+        # 放宽趋势：中枢位置同向移动（允许部分重叠）
+        # 上升趋势：前中枢ZG < 当前中枢ZG（位置抬高）
+        if pre_ZG < cur_ZG and pre_ZD < cur_ZD:
+            return '上升趋势'
+        # 下降趋势：前中枢ZD > 当前中枢ZD（位置降低）
+        if pre_ZD > cur_ZD and pre_ZG > cur_ZG:
+            return '下降趋势'
+
+        # 有重叠且位置非同向 = 盘整
         return '盘整'
 
     def cal_pen_macd(self, pen_index=None):
@@ -1789,15 +1807,12 @@ class Chan_Class:
         return False
 
     def on_turn(self, start, end, ee_data, type):
-        """背驰判断（MACD面积法 - 简化版）
+        """背驰判断（缠论原文多维度力度比较）
 
-        缠论第15课、第25课核心定义：
-        - 背驰 = 离开段MACD面积 < 进入段MACD面积
-        - 区分红绿柱：向下比较绿柱，向上比较红柱
-
-        阈值设置（放宽以增加信号）：
-        - 趋势背驰：力度比 < 0.85（面积衰减15%）
-        - 盘整背驰：力度比 < 0.90（面积衰减10%）
+        缠论原文核心定义（第5课、第15课、第24课、第25课）：
+        1. 力度 = 价格幅度 × 0.6 + 斜率 × 0.4（第5课原文定义）
+        2. 背驰 = 离开段力度 < 进入段力度（第15课）
+        3. MACD是辅助工具，不是判断依据（第25课）
 
         Args:
             start: 进入段时间
@@ -1808,6 +1823,45 @@ class Chan_Class:
         Returns:
             bool: 是否背驰
         """
+        # ============================================================
+        # 第一步：力度计算（核心维度）
+        # ============================================================
+        enter_strength = 0.0
+        exit_strength = 0.0
+
+        if len(ee_data) >= 2 and len(ee_data[0]) >= 2 and len(ee_data[1]) >= 2:
+            enter_start = ee_data[0][0]
+            enter_end = ee_data[0][1]
+            exit_start = ee_data[1][0]
+            exit_end = ee_data[1][1]
+
+            enter_strength = self._calculate_movement_strength(enter_start, enter_end)
+            exit_strength = self._calculate_movement_strength(exit_start, exit_end)
+
+        # 力度比
+        if enter_strength > 0:
+            strength_ratio = exit_strength / enter_strength
+        else:
+            strength_ratio = 1.0
+
+        # ============================================================
+        # 第二步：判断走势类型
+        # ============================================================
+        bs_type = self.cal_bs_type()
+        is_trend = (bs_type == '趋势')
+
+        # ============================================================
+        # 第三步：结构背驰判定（缠论原文阈值）
+        # ============================================================
+        # 缠论原文：趋势背驰要求力度衰减，盘整背驰条件更宽松
+        if is_trend:
+            structure_bc = strength_ratio < 0.9  # 趋势：力度衰减10%即算背驰
+        else:
+            structure_bc = strength_ratio < 0.95  # 盘整：力度衰减5%即算背驰
+
+        # ============================================================
+        # 第四步：MACD辅助确认（非主要判断）
+        # ============================================================
         start_macd = self.macd.get(start, {'total': 0, 'positive': 0, 'negative': 0})
         end_macd = self.macd.get(end, {'total': 0, 'positive': 0, 'negative': 0})
 
@@ -1819,33 +1873,30 @@ class Chan_Class:
 
         # 根据方向选择对应颜色的MACD面积
         if type == 'down':
-            compare_macd = start_macd.get('negative', start_macd.get('total', 0))
+            enter_macd = start_macd.get('negative', start_macd.get('total', 0))
             exit_macd = end_macd.get('negative', end_macd.get('total', 0))
         else:
-            compare_macd = start_macd.get('positive', start_macd.get('total', 0))
+            enter_macd = start_macd.get('positive', start_macd.get('total', 0))
             exit_macd = end_macd.get('positive', end_macd.get('total', 0))
 
-        # 处理NaN
-        if math.isnan(compare_macd) or math.isnan(exit_macd):
-            return False
+        macd_confirm = False
+        if enter_macd > 0:
+            macd_ratio = exit_macd / enter_macd
+            macd_confirm = macd_ratio < 0.8  # MACD面积衰减20%作为辅助确认
 
-        if compare_macd > 0:
-            ratio = exit_macd / compare_macd
-
-            # 区分趋势背驰和盘整背驰
-            bs_type = self.cal_bs_type()
-            is_trend = (bs_type == '趋势')
-
-            # 放宽阈值：趋势0.85，盘整0.90
-            threshold = 0.85 if is_trend else 0.90
-            is_divergence = ratio < threshold
-
+        # ============================================================
+        # 第五步：综合判定
+        # ============================================================
+        # 缠论原则：结构优先，MACD辅助
+        if structure_bc:
             ChanLog.log(self.freq, self.symbol,
-                       f'背驰判断: 比较={compare_macd:.4f}, 离开={exit_macd:.4f}, '
-                       f'比例={ratio:.2%}, 类型={bs_type}, 阈值={threshold:.0%}, '
-                       f'结果={"背驰" if is_divergence else "非背驰"}')
-
-            return is_divergence
+                       f'背驰确认: {bs_type}, 力度比={strength_ratio:.2%}, MACD确认={macd_confirm}')
+            return True
+        elif macd_confirm and strength_ratio < 0.95:
+            # 结构未达标但MACD确认，且力度有明显衰减，也算弱背驰
+            ChanLog.log(self.freq, self.symbol,
+                       f'弱背驰: {bs_type}, 力度比={strength_ratio:.2%}, MACD确认')
+            return True
 
         return False
 
@@ -1922,9 +1973,14 @@ class Chan_Class:
         return chan_pivot.pivot_list
 
     def qjt_turn(self, start, end, type):
-        """区间套判断背驰（缠论第27课）
+        """区间套验证（缠论第27课原文）
 
-        核心要求：高级别背驰段中，低级别必须出现同方向的背驰段才能精确定位。
+        缠论原文核心：区间套是"精确定位"机制，不是"否决"机制
+        - 大级别背驰定方向
+        - 中级别找买卖点结构
+        - 小级别精确定位入场时机
+
+        区间套未确认不代表买卖点无效，只是精度不够。
 
         Args:
             start: 背驰段开始时间
@@ -1937,10 +1993,10 @@ class Chan_Class:
         qjt_pivot_list = []
         chan = self.next
         if not chan:
-            return True, qjt_pivot_list
+            return True, qjt_pivot_list  # 无低级别数据，不阻挡
+
         ans = True
-        ChanLog.log(self.freq, self.symbol, f'区间套判断背驰: type={type}')
-        ChanLog.log(self.freq, self.symbol, self.freq)
+        ChanLog.log(self.freq, self.symbol, f'区间套验证: type={type}')
 
         while chan:
             tmp = False
@@ -1971,28 +2027,26 @@ class Chan_Class:
                         break
             data.reverse()
             chan_pivot_list = chan.qjt_pivot(data, type)
-            ChanLog.log(self.freq, self.symbol, f'低级别中枢: {chan_pivot_list}')
             qjt_pivot_list.append(chan_pivot_list)
 
-            # 区间套验证（缠论第27课）：一类买卖点必须有背驰段精确定位
-            # 缠论原文：一买一卖是趋势转折点，需要低级别走势配合确认
-
+            # ============================================================
+            # 关键修正：区间套是确认机制，不是否决机制（缠论第27课原文）
+            # ============================================================
             if chan_pivot_list and len(chan_pivot_list[-1][12]) > 0:
-                # 有背驰段，精确确认（一买一卖的必要条件）
+                # 有背驰段，精确确认
                 ts_item = chan_pivot_list[-1][12][-1]
                 start = ts_item[0]
                 end = ts_item[1]
                 tmp = True
-                chan = chan.next
                 ChanLog.log(self.freq, self.symbol, f'区间套确认(背驰段): ts=[{start}, {end}]')
             else:
-                # 无背驰段，不允许一买一卖
-                ChanLog.log(self.freq, self.symbol, '区间套未确认: 无背驰段(一买一卖需要背驰段)')
-                tmp = False
+                # 无背驰段，标记为"未精确定位"但不否决
+                # 缠论原文：区间套未确认不代表买卖点无效，只是精度不够
+                ChanLog.log(self.freq, self.symbol, '区间套未精确定位: 无背驰段(买卖点仍有效)')
+                tmp = True  # ← 关键修正：返回True，不否决
 
             ans = tmp and ans
-            if not ans:
-                break
+            chan = chan.next
 
         return ans, qjt_pivot_list
 

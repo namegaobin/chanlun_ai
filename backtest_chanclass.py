@@ -53,8 +53,22 @@ from binance import get_klines
 # ============================================================
 # 常量定义（从 backtest_incremental.py 移除的常量）
 # ============================================================
+# 策略版本信息
+# ============================================================
 
+STRATEGY_VERSION = "V23"
+STRATEGY_NAME = "一类买卖点高置信度"
+STRATEGY_DESC = """
+核心规则：
+- 一类买卖点：置信度≥85（需区间套+成交量背驰确认）才允许交易
+- 二类买卖点：顺势交易核心，置信度≥60
+- 三类买卖点：辅助信号，仓位减半
+"""
+
+# ============================================================
 # 信号过滤阈值（缠论原文：买卖点只有有效/无效，无置信度概念）
+# ============================================================
+
 MIN_CONFIDENCE = 0      # 已废弃，保留向后兼容
 MIN_RISK_REWARD = 1.0   # 一类买卖点盈亏比要求（适中）
 MIN_RISK_REWARD_2 = 1.0 # 二类买卖点盈亏比要求（放宽）
@@ -117,7 +131,8 @@ def signal_type_map(chan_type: str) -> str:
     return CHAN_SIGNAL_MAP.get(chan_type, chan_type.lower())
 
 
-def strength_to_confidence(strength: str, signal_type: str = None, trend_type: str = None) -> float:
+def strength_to_confidence(strength: Any, signal_type: str = None, trend_type: str = None,
+                           qjt_depth: int = None, volume_diverged: bool = False) -> float:
     """将信号强度转换为置信度
 
     缠论原则：
@@ -125,28 +140,43 @@ def strength_to_confidence(strength: str, signal_type: str = None, trend_type: s
     - 二类买卖点是确认信号，次之
     - 三类买卖点风险最大，置信度最低
     - 趋势背驰比盘整背驰更可靠
+    - 区间套确认是强信号（+15）
+    - 成交量背驰是辅助确认（+10）
 
     Args:
-        strength: 信号强度（超强/强/中/弱），买点有此字段
+        strength: 信号强度（超强/强/中/弱字符串，或数值70-100）
         signal_type: 信号类型（B1/B2/B3/S1/S2/S3）
         trend_type: 趋势类型（趋势/盘整）
+        qjt_depth: 区间套深度（>=0表示确认，None/-1表示未确认）
+        volume_diverged: 是否成交量背驰
 
     Returns:
         置信度（0-100）
     """
-    # 如果有strength字段，优先使用
-    if strength and strength in STRENGTH_TO_CONFIDENCE:
-        base_conf = STRENGTH_TO_CONFIDENCE[strength]
+    # 处理strength字段（可能是字符串或数值）
+    base_conf = 60
+    if strength is not None:
+        if isinstance(strength, str) and strength in STRENGTH_TO_CONFIDENCE:
+            base_conf = STRENGTH_TO_CONFIDENCE[strength]
+        elif isinstance(strength, (int, float)):
+            # chanClass.py直接用数值表示强度（70-100）
+            base_conf = float(strength)
     elif signal_type and signal_type in SIGNAL_TYPE_CONFIDENCE:
         # 使用信号类型的默认置信度
         base_conf = SIGNAL_TYPE_CONFIDENCE[signal_type]
-    else:
-        base_conf = 60
 
     # 根据趋势类型调整
     adjust = TREND_TYPE_ADJUST.get(trend_type, 0)
 
-    confidence = base_conf + adjust
+    # 区间套确认加分（缠论第27课：区间套是转折的精确确认）
+    qjt_bonus = 0
+    if qjt_depth is not None and qjt_depth >= 0:
+        qjt_bonus = 15
+
+    # 成交量背驰加分（缠论第7课：量能衰减确认走势结束）
+    volume_bonus = 10 if volume_diverged else 0
+
+    confidence = base_conf + adjust + qjt_bonus + volume_bonus
     return max(40, min(95, confidence))  # 限制在40-95之间
 
 
@@ -467,65 +497,101 @@ def is_strong_trend(chan_30m: Chan_Class, trend_direction: str) -> bool:
 
 
 def should_trade_signal_chan(signal_name: str, trend_direction: str, strong_trend: bool = False,
-                            confidence: float = 50.0, bs_type: str = None) -> Tuple[bool, float]:
-    """根据趋势方向过滤信号（V20 - 缠论原文精确版）
+                            confidence: float = 50.0, bs_type: str = None,
+                            trend_30m_type: str = '盘整', pivot_30m_count: int = 0) -> Tuple[bool, float]:
+    """根据趋势方向过滤信号（严格遵循缠论原文）
 
-    缠论第17课核心要点：
-    1. 一买是下跌趋势背驰后的折返点 → 只在下跌趋势末期有效
-    2. 一卖是上涨趋势背驰后的折返点 → 只在上涨趋势末期有效
-    3. 二买确认上涨趋势，二卖确认下跌趋势
+    缠论原文核心思想（第24课、第27课）：
+    1. 一买：下降趋势背驰转折，必须有下降趋势存在
+    2. 一卖：上升趋势背驰转折，必须有上升趋势存在
+    3. 二买：一买成功后的再次介入点，顺势交易
+    4. 二卖：一卖成功后的再次介入点，顺势交易
+    5. 三买：不破中枢ZG的回调，趋势延续
+    6. 三卖：不破中枢ZD的反弹，趋势延续
 
-    V20策略核心：
-    - 上涨趋势：只做多（2buy核心，3buy辅助）
-    - 下跌趋势：只做空（2sell核心，3sell辅助）
-    - 一类买卖点：禁止交易（历史数据验证，25%胜率不可接受）
+    区间套核心（第27课）：
+    - 30m：大级别定方向（缠论结构，非价格动量）
+    - 5m：操作级别找买卖点（核心）
+    - 1m：精确定位
 
     Args:
         signal_name: 信号名称
-        trend_direction: 回测框架判断的趋势方向
-        confidence: 信号置信度
-        bs_type: 信号背驰类型（'趋势'/'盘整'）
+        trend_direction: 30m级别趋势方向（可能来自价格动量）
+        confidence: 信号置信度（60基础，+15区间套，+10成交量，+15趋势背驰）
+        bs_type: 5m级别背驰类型（'下降趋势'/'上升趋势'/'盘整'）
+        trend_30m_type: 30m级别缠论趋势类型（缠论结构判断）
+        pivot_30m_count: 30m级别中枢数量
 
     Returns:
         (allowed, position_multiplier)
     """
     is_sell = 'sell' in signal_name
     is_buy = 'buy' in signal_name
+    is_first_class = signal_name in ('1buy', '1sell')
 
-    # 高置信度信号增加仓位
-    confidence_multiplier = 1.0
-    if confidence >= 85:
-        confidence_multiplier = 1.5
-    elif confidence >= 75:
-        confidence_multiplier = 1.3
+    # === 一类买卖点：必须趋势背驰 ===
+    # 缠论原文第24课：一买必须下降趋势背驰，一卖必须上升趋势背驰
+    if is_first_class:
+        # 置信度阈值85（区间套+成交量背驰确认）
+        if confidence < 85:
+            return False, 0.0
 
-    # === 一类买卖点：禁止交易 ===
-    # 回测数据验证：1buy胜率25%，亏损严重
-    # 即使是趋势背驰信号，实际表现也不佳
-    if signal_name in ('1buy', '1sell'):
-        return False, 0.0
+        # ============================================================
+        # 一买：趋势反转信号（下降→上升）
+        # ============================================================
+        # 缠论原文：一买是下降趋势结束的位置
+        # 区间套验证：30m必须是缠论定义的下降趋势或盘整
+        # 关键：不能用价格动量判断，必须是缠论结构
+        if signal_name == '1buy':
+            if bs_type != '下降趋势':
+                return False, 0.0  # 5m必须下降趋势背驰
+            # 区间套验证：30m不能是缠论上升趋势
+            if trend_30m_type == '上升趋势' and pivot_30m_count >= 2:
+                return False, 0.0  # 30m缠论上升趋势不做一买
+            return True, 1.0
+
+        # ============================================================
+        # 一卖：趋势反转信号（上升→下降）
+        # ============================================================
+        # 缠论原文：一卖是上升趋势结束的位置
+        # 区间套验证：30m必须是缠论定义的上升趋势（至少2个中枢）
+        # 关键：必须有缠论趋势结构，不能仅靠价格动量
+        if signal_name == '1sell':
+            if bs_type != '上升趋势':
+                return False, 0.0  # 5m必须上升趋势背驰
+            # 区间套核心：30m必须也是缠论上升趋势（至少2个中枢）
+            if pivot_30m_count < 2:
+                return False, 0.0  # 30m中枢不足，无缠论趋势结构
+            if trend_30m_type != '上升趋势':
+                return False, 0.0  # 30m不是缠论上升趋势
+            return True, 1.0
 
     # === 二类买卖点：顺势交易核心 ===
+    # 缠论原文第17课：二买是一买后的再次介入
     if trend_direction == 'up':
         if is_buy:
             if signal_name == '2buy':
-                return True, 1.2 * confidence_multiplier
+                return True, 1.0  # 上升趋势做多
             elif signal_name == '3buy':
-                return True, 0.8 * confidence_multiplier
+                return True, 0.8  # 三买仓位减半
+        # 上升趋势不做空
         return False, 0.0
 
     if trend_direction == 'down':
         if is_sell:
             if signal_name == '2sell':
-                return True, 1.0 * confidence_multiplier
+                return True, 1.0  # 下降趋势做空
             elif signal_name == '3sell':
-                return True, 0.7 * confidence_multiplier
+                return True, 0.8
+        # 下降趋势不做多
         return False, 0.0
 
-    # 盘整状态：只允许二卖
+    # 盘整状态：方向未定，二买二卖可以交易
     if trend_direction == 'consolidation':
-        if signal_name == '2sell':
-            return True, 0.8 * confidence_multiplier
+        if signal_name in ('2buy', '2sell'):
+            return True, 0.8
+        elif signal_name in ('3buy', '3sell'):
+            return True, 0.6
 
     return False, 0.0
 
@@ -547,17 +613,43 @@ def parse_end_date(date_str: str) -> datetime:
     raise ValueError(f"无法解析日期: {date_str}")
 
 
-def fetch_btc_1m_klines(days: int = 5, end_time: Optional[datetime] = None) -> List[Dict[str, Any]]:
-    """获取BTC指定时间段的1分钟K线"""
-    if end_time is None:
-        end_time = datetime.now(timezone.utc)
+def parse_start_date(date_str: str) -> datetime:
+    """解析开始日期字符串"""
+    return parse_end_date(date_str)  # 使用相同逻辑
 
-    start = end_time - timedelta(days=days)
-    start_ms = int(start.timestamp() * 1000)
-    total_limit = days * 1440 + 100
+
+def fetch_btc_1m_klines(
+    days: int = 5,
+    end_time: Optional[datetime] = None,
+    start_time: Optional[datetime] = None
+) -> List[Dict[str, Any]]:
+    """获取BTC指定时间段的1分钟K线
+
+    Args:
+        days: 回测天数（当 start_time 和 end_time 都未指定时使用）
+        end_time: 结束时间
+        start_time: 开始时间
+    """
+    # 确定时间范围
+    if start_time and end_time:
+        # 同时指定了开始和结束时间
+        pass
+    elif start_time:
+        # 只指定了开始时间，自动计算结束时间
+        end_time = start_time + timedelta(days=days)
+    elif end_time:
+        # 只指定了结束时间，自动计算开始时间
+        start_time = end_time - timedelta(days=days)
+    else:
+        # 都未指定，使用默认值
+        end_time = datetime.now(timezone.utc)
+        start_time = end_time - timedelta(days=days)
+
+    start_ms = int(start_time.timestamp() * 1000)
+    total_limit = int((end_time - start_time).total_seconds() / 60) + 100
 
     print(f"  正在获取 BTCUSDT 1m K线数据...")
-    print(f"  时间范围: {start.strftime('%Y-%m-%d %H:%M')} UTC ~ {end_time.strftime('%Y-%m-%d %H:%M')} UTC")
+    print(f"  时间范围: {start_time.strftime('%Y-%m-%d %H:%M')} UTC ~ {end_time.strftime('%Y-%m-%d %H:%M')} UTC")
 
     klines = get_klines("BTCUSDT", "1m", limit=total_limit, start_time=start_ms)
     print(f"  获取到 {len(klines)} 根K线")
@@ -584,13 +676,30 @@ def create_bar_data(kline: Dict, symbol: str = "BTCUSDT") -> BarData:
     )
 
 
-def run_backtest(days: int = 5, end_date: Optional[str] = None) -> None:
+def run_backtest(days: int = 5, start_date: Optional[str] = None, end_date: Optional[str] = None) -> None:
     """执行回测"""
-    # 解析结束时间
+    # 解析开始和结束时间
+    start_time = None
     end_time = None
+
+    if start_date:
+        start_time = parse_start_date(start_date)
+        print(f"  回测开始时间: {start_time.strftime('%Y-%m-%d %H:%M')} UTC")
+
     if end_date:
         end_time = parse_end_date(end_date)
         print(f"  回测结束时间: {end_time.strftime('%Y-%m-%d %H:%M')} UTC")
+
+    # 如果只指定了其中一个，自动计算另一个
+    if start_time and not end_time:
+        end_time = start_time + timedelta(days=days)
+        print(f"  回测结束时间: {end_time.strftime('%Y-%m-%d %H:%M')} UTC (自动计算)")
+    elif end_time and not start_time:
+        start_time = end_time - timedelta(days=days)
+        print(f"  回测开始时间: {start_time.strftime('%Y-%m-%d %H:%M')} UTC (自动计算)")
+    elif not start_time and not end_time:
+        end_time = datetime.now(timezone.utc)
+        start_time = end_time - timedelta(days=days)
 
     print("=" * 80)
     print("  缠论引擎回测系统 - 基于 chanClass.py")
@@ -600,7 +709,7 @@ def run_backtest(days: int = 5, end_date: Optional[str] = None) -> None:
 
     # 1. 获取数据
     print("\n[1/5] 获取BTC 1分钟K线数据...")
-    klines = fetch_btc_1m_klines(days=days, end_time=end_time)
+    klines = fetch_btc_1m_klines(days=days, end_time=end_time, start_time=start_time)
 
     if len(klines) < WARMUP_BARS + 100:
         print(f"  错误: K线数据不足（需要至少 {WARMUP_BARS + 100} 根）")
@@ -612,7 +721,7 @@ def run_backtest(days: int = 5, end_date: Optional[str] = None) -> None:
     # 2. 初始化多级别 Chan_Class 链表
     print(f"\n[2/5] 初始化 Chan_Class 多级别链表（预热{WARMUP_BARS}根K线）...")
 
-    # 30分钟级别
+    # 30分钟级别（大级别定方向）
     chan_30m = Chan_Class(
         freq='30分钟',
         symbol='BTCUSDT',
@@ -625,7 +734,7 @@ def run_backtest(days: int = 5, end_date: Optional[str] = None) -> None:
         gz=False,
     )
 
-    # 5分钟级别
+    # 5分钟级别（操作级别）
     chan_5m = Chan_Class(
         freq='5分钟',
         symbol='BTCUSDT',
@@ -638,7 +747,7 @@ def run_backtest(days: int = 5, end_date: Optional[str] = None) -> None:
         gz=False,
     )
 
-    # 1分钟级别
+    # 1分钟级别（确认级别）
     chan_1m = Chan_Class(
         freq='1分钟',
         symbol='BTCUSDT',
@@ -710,9 +819,13 @@ def run_backtest(days: int = 5, end_date: Optional[str] = None) -> None:
             "volume": bar.volume,
         }
 
-        # 记录喂入前的信号数量
-        prev_buy_len = len(chan_5m.buy_list)
-        prev_sell_len = len(chan_5m.sell_list)
+        # 记录喂入前的信号数量（根据操作级别）
+        if operating_level == "1m":
+            prev_buy_len = len(chan_1m.buy_list)
+            prev_sell_len = len(chan_1m.sell_list)
+        else:
+            prev_buy_len = len(chan_5m.buy_list)
+            prev_sell_len = len(chan_5m.sell_list)
 
         # 喂入各级别
         # 1分钟级别（每根都喂）
@@ -734,36 +847,47 @@ def run_backtest(days: int = 5, end_date: Optional[str] = None) -> None:
             )
             chan_5m.on_bar(agg_bar_5m_bar)
 
-        # 30分钟级别（聚合后喂入）
-        agg_bar_30m = agg_30m.update(bar_dict)
-        if agg_bar_30m:
-            agg_bar_30m_bar = BarData(
-                datetime=agg_bar_30m["date"],
-                symbol="BTCUSDT",
-                exchange=Exchange.XSHG,
-                freq='30m',
-                open_price=agg_bar_30m["open"],
-                high_price=agg_bar_30m["high"],
-                low_price=agg_bar_30m["low"],
-                close_price=agg_bar_30m["close"],
-                volume=agg_bar_30m.get("volume", 0),
-            )
-            chan_30m.on_bar(agg_bar_30m_bar)
+        # 30分钟级别（聚合后喂入）- 仅5m操作时需要
+        if agg_30m is not None:
+            agg_bar_30m = agg_30m.update(bar_dict)
+            if agg_bar_30m:
+                agg_bar_30m_bar = BarData(
+                    datetime=agg_bar_30m["date"],
+                    symbol="BTCUSDT",
+                    exchange=Exchange.XSHG,
+                    freq='30m',
+                    open_price=agg_bar_30m["open"],
+                    high_price=agg_bar_30m["high"],
+                    low_price=agg_bar_30m["low"],
+                    close_price=agg_bar_30m["close"],
+                    volume=agg_bar_30m.get("volume", 0),
+                )
+                chan_30m.on_bar(agg_bar_30m_bar)
 
-        # 合并趋势判断：缠论中枢趋势 + 价格动量（双确认更可靠）
+        # 缠论原文趋势判断：使用30m级别走势类型（cal_bs_type）
+        # 缠论第27课：区间套核心 = 30m方向 + 5m买卖点 + 1m精度
         momentum_trend = get_price_momentum_trend(chan_1m.k_list, lookback=120)
         chanlun_trend = get_trend_direction(chan_30m)
 
-        # 双重趋势确认逻辑：
-        # 1. 如果两者一致，使用该趋势
-        # 2. 如果不一致，使用价格动量（更实时）
-        # 3. 缠论趋势作为额外约束：明确下跌时禁止1buy，明确上涨时禁止1sell
-        if momentum_trend == chanlun_trend:
-            trend_direction_cache = momentum_trend
-        elif chanlun_trend == 'consolidation':
-            trend_direction_cache = momentum_trend
+        # 30m走势类型（核心）：用于区间套验证
+        trend_30m_type = chan_30m.cal_bs_type() if chan_30m and hasattr(chan_30m, 'cal_bs_type') else '盘整'
+
+        # 中枢数量判断：少于2个中枢时，使用价格动量辅助
+        pivot_count = len(chan_30m.pivot_list) if chan_30m and hasattr(chan_30m, 'pivot_list') else 0
+
+        # 区间套趋势方向转换：
+        # '上升趋势' → 'up'，'下降趋势' → 'down'，'盘整' → 'consolidation'
+        if pivot_count >= 2:
+            # 有足够中枢，使用缠论趋势判断
+            if trend_30m_type == '上升趋势':
+                trend_direction_cache = 'up'
+            elif trend_30m_type == '下降趋势':
+                trend_direction_cache = 'down'
+            else:
+                # 缠论判断盘整，但价格动量明显时使用动量
+                trend_direction_cache = momentum_trend
         else:
-            # 不一致时，使用价格动量但保留缠论方向标记
+            # 中枢不足时，使用价格动量（更可靠）
             trend_direction_cache = momentum_trend
 
         # 预热期间不交易
@@ -924,7 +1048,7 @@ def run_backtest(days: int = 5, end_date: Optional[str] = None) -> None:
             if len(signal) < 6 or signal[5] != 1:
                 continue
 
-            # 信号格式: [date, price, type, eval_time, position, valid, invalid_time, type_str, strength, qjt_pivot_list]
+            # 信号格式: [date, price, type, eval_time, position, valid, invalid_time, type_str, strength, qjt_pivot_list, qjt_depth]
             chan_signal_name = signal[2]  # B1, B2, B3, S1, S2, S3
             signal_name = signal_type_map(chan_signal_name)
             signal_price = signal[1]
@@ -932,7 +1056,10 @@ def run_backtest(days: int = 5, end_date: Optional[str] = None) -> None:
             strength = signal[8] if len(signal) > 8 else None
             bs_type = signal[7] if len(signal) > 7 else None  # 趋势/盘整（背驰类型）
             trend_type = bs_type  # 兼容旧变量名
-            confidence = strength_to_confidence(strength, chan_signal_name, trend_type)
+            qjt_depth = signal[10] if len(signal) > 10 else None  # 区间套深度
+            volume_diverged = False  # TODO: 成交量背驰暂未实现
+
+            confidence = strength_to_confidence(strength, chan_signal_name, trend_type, qjt_depth, volume_diverged)
 
             # 生成唯一键
             sig_key = f"{signal_name}_{signal_time}_{signal_price}"
@@ -960,10 +1087,22 @@ def run_backtest(days: int = 5, end_date: Optional[str] = None) -> None:
 
                 # 趋势过滤（强化版：返回是否允许 + 仓位系数）
                 trend_allowed, position_multiplier = should_trade_signal_chan(
-                    signal_name, trend_direction_cache, strong_trend, confidence, bs_type
+                    signal_name, trend_direction_cache, strong_trend, confidence, bs_type,
+                    trend_30m_type, pivot_count  # 新增：30m缠论趋势结构
                 )
                 if not trend_allowed:
-                    signal_record["filter_reason"] = f"趋势过滤({trend_direction_cache}不做{signal_name},强趋势={strong_trend})"
+                    # 精确过滤原因（区分置信度不足和趋势不匹配）
+                    if signal_name in ('1buy', '1sell'):
+                        # 一类买卖点过滤原因（缠论原文：必须有对应趋势）
+                        threshold = 85
+                        if confidence < threshold:
+                            signal_record["filter_reason"] = f"一{('买' if signal_name == '1buy' else '卖')}置信度{confidence:.0f}<{threshold}(需区间套+成交量背驰确认)"
+                        else:
+                            # 明确说明趋势方向不匹配
+                            required_trend = '下降趋势' if signal_name == '1buy' else '上升趋势'
+                            signal_record["filter_reason"] = f"一{('买' if signal_name == '1buy' else '卖')}需要{required_trend}(30m={trend_direction_cache},5m={bs_type})"
+                    else:
+                        signal_record["filter_reason"] = f"趋势过滤({trend_direction_cache}不做{signal_name},强趋势={strong_trend})"
                     signal_record["filtered"] = True
                     signals_received.append(signal_record)
                     continue
@@ -1155,6 +1294,9 @@ def run_backtest(days: int = 5, end_date: Optional[str] = None) -> None:
         total_bars=len(klines),
         warmup_bars=WARMUP_BARS,
         signals_received=signals_received,
+        strategy_version=STRATEGY_VERSION,
+        strategy_name=STRATEGY_NAME,
+        strategy_desc=STRATEGY_DESC,
     )
 
     # 保存报告
@@ -1201,10 +1343,11 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("-d", "--days", type=int, default=5, help="回测天数（默认5天）")
+    parser.add_argument("-s", "--start-date", type=str, default=None, help="开始日期，格式: YYYY-MM-DD")
     parser.add_argument("-e", "--end-date", type=str, default=None, help="结束日期，格式: YYYY-MM-DD")
 
     args = parser.parse_args()
-    run_backtest(days=args.days, end_date=args.end_date)
+    run_backtest(days=args.days, start_date=args.start_date, end_date=args.end_date)
 
 
 if __name__ == "__main__":
