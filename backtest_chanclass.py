@@ -56,11 +56,12 @@ from binance import get_klines
 # 策略版本信息
 # ============================================================
 
-STRATEGY_VERSION = "V23"
-STRATEGY_NAME = "一类买卖点高置信度"
+STRATEGY_VERSION = "V25"
+STRATEGY_NAME = "区间套确认机制"
 STRATEGY_DESC = """
 核心规则：
-- 一类买卖点：置信度≥85（需区间套+成交量背驰确认）才允许交易
+- 一类买卖点：置信度≥85（区间套+成交量背驰确认）
+- 区间套：作为"确认机制"而非"否决机制"（缠论第27课原文）
 - 二类买卖点：顺势交易核心，置信度≥60
 - 三类买卖点：辅助信号，仓位减半
 """
@@ -132,7 +133,8 @@ def signal_type_map(chan_type: str) -> str:
 
 
 def strength_to_confidence(strength: Any, signal_type: str = None, trend_type: str = None,
-                           qjt_depth: int = None, volume_diverged: bool = False) -> float:
+                           qjt_depth: int = None, volume_diverged: bool = False,
+                           trend_30m_type: str = None) -> float:
     """将信号强度转换为置信度
 
     缠论原则：
@@ -149,18 +151,20 @@ def strength_to_confidence(strength: Any, signal_type: str = None, trend_type: s
         trend_type: 趋势类型（趋势/盘整）
         qjt_depth: 区间套深度（>=0表示确认，None/-1表示未确认）
         volume_diverged: 是否成交量背驰
+        trend_30m_type: 30m级别趋势类型（未使用）
 
     Returns:
         置信度（0-100）
     """
     # 处理strength字段（可能是字符串或数值）
+    # chanClass.py直接返回置信度数值（已经包含区间套+成交量加分）
     base_conf = 60
     if strength is not None:
         if isinstance(strength, str) and strength in STRENGTH_TO_CONFIDENCE:
             base_conf = STRENGTH_TO_CONFIDENCE[strength]
         elif isinstance(strength, (int, float)):
-            # chanClass.py直接用数值表示强度（70-100）
-            base_conf = float(strength)
+            # chanClass.py直接返回置信度数值
+            return max(40, min(95, float(strength)))
     elif signal_type and signal_type in SIGNAL_TYPE_CONFIDENCE:
         # 使用信号类型的默认置信度
         base_conf = SIGNAL_TYPE_CONFIDENCE[signal_type]
@@ -532,18 +536,15 @@ def should_trade_signal_chan(signal_name: str, trend_direction: str, strong_tren
 
     # === 一类买卖点：趋势转折信号（缠论原文第24课、第27课）===
     # 缠论核心：一类买卖点是趋势转折点，应捕捉30m级别趋势转折
+    # 置信度已在计算时加入逆势惩罚，这里只需统一阈值
     if is_first_class:
-        # 置信度阈值85（区间套+成交量背驰确认）
+        # 统一置信度阈值85（逆势惩罚已在置信度计算中处理）
         if confidence < 85:
             return False, 0.0
 
         # ============================================================
         # 一买：下降趋势转折向上（缠论原文：下降趋势背驰转折点）
         # ============================================================
-        # 区间套核心（第27课）：
-        #   - 30m下降趋势：一买是顺势转折信号（高置信）
-        #   - 30m盘整：方向选择（正常仓位）
-        #   - 30m上升趋势：一买是逆势回调，风险较高
         if signal_name == '1buy':
             if bs_type != '下降趋势':
                 return False, 0.0  # 5m必须下降趋势背驰
@@ -556,10 +557,6 @@ def should_trade_signal_chan(signal_name: str, trend_direction: str, strong_tren
         # ============================================================
         # 一卖：上升趋势转折向下（缠论原文：上升趋势背驰转折点）
         # ============================================================
-        # 区间套核心（第27课）：
-        #   - 30m上升趋势：一卖是顺势转折信号（高置信）
-        #   - 30m盘整：方向选择（正常仓位）
-        #   - 30m下降趋势：一卖是逆势反弹，风险较高
         if signal_name == '1sell':
             if bs_type != '上升趋势':
                 return False, 0.0  # 5m必须上升趋势背驰
@@ -1058,7 +1055,7 @@ def run_backtest(days: int = 5, start_date: Optional[str] = None, end_date: Opti
             qjt_depth = signal[10] if len(signal) > 10 else None  # 区间套深度
             volume_diverged = False  # TODO: 成交量背驰暂未实现
 
-            confidence = strength_to_confidence(strength, chan_signal_name, trend_type, qjt_depth, volume_diverged)
+            confidence = strength_to_confidence(strength, chan_signal_name, trend_type, qjt_depth, volume_diverged, trend_30m_type)
 
             # 生成唯一键
             sig_key = f"{signal_name}_{signal_time}_{signal_price}"
