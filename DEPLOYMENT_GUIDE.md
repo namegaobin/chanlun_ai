@@ -1,8 +1,8 @@
-# ChanLun AI 部署指南 (Conda版本)
+# ChanLun AI 部署指南 (Linux VPS版)
 
 ## 📍 项目位置
 ```
-/Users/alvingao/.openclaw/workspace/chanlun_ai
+/root/.openclaw/workspace/chanlun_ai
 ```
 
 ## ✅ 已完成
@@ -12,30 +12,21 @@
    git clone https://github.com/namegaobin/chanlun_ai.git
    ```
 
-2. **使用现有Conda环境** ✅
-   - 环境名称：`chanClaw`
-   - 环境路径：`/opt/homebrew/Caskroom/miniforge/base/envs/chanClaw`
-   - Python版本：3.12.11
+2. **创建虚拟环境** ✅
+   - 环境路径：`/root/.openclaw/workspace/chanlun_ai/venv`
+   - Python版本：3.12.3
    - 已安装核心依赖：
      - numpy 2.4.4
-     - pandas 3.0.1
-     - matplotlib 3.10.8
-     - fastapi 0.104.1
-     - uvicorn 0.24.0
-     - requests 2.33.0
+     - pandas 3.0.2
+     - matplotlib 3.10.9
+     - mplfinance 0.12.10b0
+     - fastapi 0.136.1
+     - uvicorn 0.46.0
+     - requests 2.33.1
 
-3. **符号链接** ✅
-   ```bash
-   ln -sfn /opt/homebrew/Caskroom/miniforge/base/envs/chanClaw conda_env
-   ```
-
-4. **配置文件** ✅
+3. **配置文件** ✅
    - 已创建 `.env` 文件
-   - 已配置为使用 DeepSeek API
-
-5. **快速启动脚本** ✅
-   - 已更新为使用conda环境
-   - 支持：analyze, structured, table, web, stats, info
+   - 默认配置使用 DeepSeek API
 
 ## 🔑 配置API Key
 
@@ -48,69 +39,61 @@ nano .env
 
 修改这一行：
 ```env
-DEEPSEEK_API_KEY=你的API_Key
+DEEPSEEK_API_KEY=你的实际DeepSeek_API_Key
 ```
 
-### 方法2：使用sed替换
-
-```bash
-cd ~/.openclaw/workspace/chanlun_ai
-sed -i '' 's/YOUR_DEEPSEEK_KEY_HERE/你的实际API_Key/' .env
+或者如果是腾讯云 DeepSeek：
+```env
+DEEPSEEK_API_KEY=你的腾讯云DeepSeek_API_Key
 ```
 
 ## 🚀 运行项目
 
-### 使用快速启动脚本（推荐）
+### 使用虚拟环境运行
 
 ```bash
-cd ~/.openclaw/workspace/chanlun_ai
-
-# 查看环境信息
-./quick_start.sh info
+cd /root/.openclaw/workspace/chanlun_ai
 
 # 分析 BTC/USDT 1小时周期
-./quick_start.sh analyze
+./venv/bin/python chanlun_ai.py BTCUSDT 1h --limit 200
 
-# 结构化输出
-./quick_start.sh structured
+# 结构化输出（保存到数据库）
+./venv/bin/python chanlun_ai.py BTCUSDT 1h --structured --limit 200
 
 # Markdown表格格式
-./quick_start.sh table
+./venv/bin/python chanlun_ai.py BTCUSDT 1h --table --limit 200
 
 # 启动Web服务
-./quick_start.sh web
+./venv/bin/python api/server.py
 ```
 
-### 手动运行
+或者激活虚拟环境：
 
 ```bash
-# 方法1：使用conda环境路径
-cd ~/.openclaw/workspace/chanlun_ai
-/opt/homebrew/Caskroom/miniforge/base/envs/chanClaw/bin/python chanlun_ai.py BTCUSDT 1h --limit 200
+cd /root/.openclaw/workspace/chanlun_ai
+source venv/bin/activate
 
-# 方法2：设置PATH
-export PATH="/opt/homebrew/Caskroom/miniforge/base/envs/chanClaw/bin:$PATH"
+# 激活后可以直接用 python 命令
 python chanlun_ai.py BTCUSDT 1h --limit 200
 ```
 
-## 📊 Conda环境信息
+## 📊 虚拟环境信息
 
 | 项目 | 值 |
 |------|-----|
-| 环境名称 | chanClaw |
-| 环境路径 | /opt/homebrew/Caskroom/miniforge/base/envs/chanClaw |
-| Python版本 | 3.12.11 |
-| 符号链接 | conda_env -> chanClaw环境 |
+| 环境路径 | /root/.openclaw/workspace/chanlun_ai/venv |
+| Python版本 | 3.12.3 |
 
 ### 已安装包
 
 ```
-fastapi      0.104.1
-matplotlib    3.10.8
+fastapi      0.136.1
+matplotlib    3.10.9
 numpy         2.4.4
-pandas        3.0.1
-requests      2.33.0
-uvicorn       0.24.0
+pandas        3.0.2
+requests      2.33.1
+uvicorn       0.46.0
+mplfinance    0.12.10b0
 + 其他依赖...
 ```
 
@@ -125,89 +108,70 @@ uvicorn       0.24.0
 ## 🔧 常用命令
 
 ```bash
-# 查看环境信息
-./quick_start.sh info
+# 激活虚拟环境
+source venv/bin/activate
 
 # 分析BTC 1小时
-./quick_start.sh analyze BTCUSDT 1h
+python chanlun_ai.py BTCUSDT 1h
 
 # 分析ETH 15分钟
-./quick_start.sh analyze ETHUSDT 15m
+python chanlun_ai.py ETHUSDT 15m
 
 # 多级别分析
-./quick_start.sh analyze BTCUSDT 4h
-./quick_start.sh analyze BTCUSDT 1h
-./quick_start.sh analyze BTCUSDT 15m
+python chanlun_ai.py BTCUSDT 4h
+python chanlun_ai.py BTCUSDT 1h
+python chanlun_ai.py BTCUSDT 15m
 
 # 查看统计
-./quick_start.sh stats
+python query_stats.py
 ```
 
 ## 📝 环境管理
 
-### 查看所有conda环境
-
-```bash
-conda env list
-```
-
-输出：
-```
-base                   /opt/homebrew/Caskroom/miniforge/base
-chan                   /opt/homebrew/Caskroom/miniforge/base/envs/chan
-chanClaw             *  /opt/homebrew/Caskroom/miniforge/base/envs/chanClaw  ← 当前使用
-chan_backtest          /opt/homebrew/Caskroom/miniforge/base/envs/chan_backtest
-chanlun                /opt/homebrew/Caskroom/miniforge/base/envs/chanlun
-```
-
 ### 安装额外依赖
 
 ```bash
-/opt/homebrew/Caskroom/miniforge/base/envs/chanClaw/bin/pip install 包名
+./venv/bin/pip install 包名
 ```
 
 ### 更新依赖
 
 ```bash
-/opt/homebrew/Caskroom/miniforge/base/envs/chanClaw/bin/pip install --upgrade numpy pandas
+./venv/bin/pip install --upgrade numpy pandas
 ```
 
 ## ⚠️ 注意事项
 
-1. **环境位置**：使用的是已存在的 `chanClaw` conda环境
-2. **符号链接**：`conda_env` 链接到实际的conda环境路径
-3. **PATH设置**：快速启动脚本会自动设置正确的PATH
-4. **API Key安全**：不要将 `.env` 文件提交到Git
+1. **网络访问**：如果服务器需要代理访问外网，在 `.env` 中配置：
+   ```
+   HTTP_PROXY=http://127.0.0.1:端口
+   HTTPS_PROXY=http://127.0.0.1:端口
+   ```
+2. **API Key安全**：不要将 `.env` 文件提交到Git
+3. **虚拟环境**：使用 venv 而不是 conda
 
 ## 🐛 故障排除
 
 ### 问题1：Python版本不对
 
 ```bash
-# 检查Python版本
-./quick_start.sh info
-
-# 如果版本不对，检查conda环境
-conda env list
+./venv/bin/python --version
 ```
 
 ### 问题2：缺少依赖
 
 ```bash
-# 手动安装依赖
-cd ~/.openclaw/workspace/chanlun_ai
-/opt/homebrew/Caskroom/miniforge/base/envs/chanClaw/bin/pip install -r requirements.txt
+cd /root/.openclaw/workspace/chanlun_ai
+./venv/bin/pip install -r requirements.txt
 ```
 
-### 问题3：环境不存在
+### 问题3：网络无法访问外网
 
-```bash
-# 检查所有环境
-conda env list
+如果 curl https://api.binance.com/api/v3/ping 超时：
 
-# 如果 chanClaw 不在列表中，使用其他Python 3.12环境
-# 或创建新环境（但conda create命令可能有问题）
-```
+1. 检查是否有代理需要启动
+2. 或者直接通过内网测试功能
+3. 配置 `.env` 中的代理设置
 
 ## 📞 支持
 
@@ -216,6 +180,8 @@ conda env list
 
 ---
 
-**更新时间**：2026-04-12 16:35 GMT+8
-**部署状态**：✅ 使用Conda环境 (chanClaw)
-**Python版本**：3.12.11
+**更新时间**：2026-05-01 00:45 GMT+8
+**部署状态**：✅ 使用虚拟环境 (venv)
+**Python版本**：3.12.3
+**服务器**：VM-0-9-ubuntu (腾讯云)
+**项目路径**：/root/.openclaw/workspace/chanlun_ai

@@ -30,7 +30,8 @@ _BASE_URL = "https://api.binance.com"
 _KLINES_PATH = "/api/v3/klines"
 
 # 代理配置（从环境变量读取，支持国内访问）
-_PROXY = os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy") or os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+# 硬编码代理地址以避免环境变量丢失问题（历史问题：2026-04 起 15+ 次复发）
+_PROXY = os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy") or os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or "http://127.0.0.1:11090"
 
 # 代理设置
 _PROXIES = {"http": _PROXY, "https": _PROXY} if _PROXY else None

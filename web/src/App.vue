@@ -127,9 +127,9 @@ import { analyzeAI, analyzeAstockAI, analyzeGoldAI, ASTOCK_PRESETS, GOLD_PRESETS
 import type { AIAnalysisResult, DrillLevel, DrillMarketType, ChanlunData } from '@/types/chanlun';
 import { getNextInterval, generateDrillId, getIntervalLabel, getSegmentLabel } from '@/utils/drilldown';
 
-const market = ref<MarketType>('astock');
+const market = ref<MarketType>('crypto');
 const symbol = ref('BTCUSDT');
-const interval = ref('1h');
+const interval = ref('15m');
 const analysisMode = ref<'structured' | 'table'>('structured');
 const aiResult = ref<AIAnalysisResult | null>(null);
 const analyzing = ref(false);

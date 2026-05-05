@@ -694,4 +694,4 @@ if __name__ == "__main__":
     print("Starting ChanLun Analysis API Server...")
     print("API: http://0.0.0.0:8001")
     print("Web: http://0.0.0.0:8001/web")
-    uvicorn.run(app, host="0.0.0.0", port=8003)
+    uvicorn.run(app, host="127.0.0.1", port=8003)

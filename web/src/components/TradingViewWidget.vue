@@ -103,18 +103,14 @@ const toggleLayer = (layer: 'bi' | 'xd' | 'zs' | 'fx') => {
 const fetchKlines = async () => {
   loading.value = true
   try {
-    // 动态检测 API 地址：开发环境用 8003 端口，生产环境用当前域名
-    const apiHost = window.location.port === '5173' 
-      ? `http://${window.location.hostname}:8003` 
-      : window.location.origin
-    
+    // 使用 Vite 代理，相对路径会自动转发到 127.0.0.1:8003
     let endpoint
     if (props.market === 'astock') {
-      endpoint = `${apiHost}/api/astock/kline/${props.symbol}/${props.interval}?limit=2500`
+      endpoint = `/api/astock/kline/${props.symbol}/${props.interval}?limit=2500`
     } else if (props.market === 'gold') {
-      endpoint = `${apiHost}/api/gold/kline/${props.interval}?limit=2500`
+      endpoint = `/api/gold/kline/${props.interval}?limit=2500`
     } else {
-      endpoint = `${apiHost}/api/kline/${props.symbol}/${props.interval}?limit=2500`
+      endpoint = `/api/kline/${props.symbol}/${props.interval}?limit=2500`
     }
     const response = await fetch(endpoint)
     const data = await response.json()

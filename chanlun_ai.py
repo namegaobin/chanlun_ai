@@ -36,10 +36,22 @@ from pathlib import Path
 import sqlite3
 from dotenv import load_dotenv
 
+# 清除可能阻止代理的环境变量（必须在加载 .env 之前）
+if os.getenv("NO_PROXY") == "*":
+    os.environ.pop("NO_PROXY", None)
+if os.getenv("no_proxy") == "*":
+    os.environ.pop("no_proxy", None)
+
 import pandas as pd
 import yaml
 
+# 加载 .env 文件（必须在导入 binance 之前，才能让 binance 模块读取到 HTTP_PROXY）
+env_path = Path(__file__).parent / ".env"
+if env_path.exists():
+    load_dotenv(env_path, override=True)
+
 # 项目模块导入
+from binance import get_klines# 项目模块导入
 from binance import get_klines
 from chanlun_adapter import convert_to_chanlun_bars
 from chanlun_icl import ICL
@@ -420,7 +432,13 @@ def load_api_key():
     # 加载 .env 文件（优先级最高）
     env_path = Path(__file__).parent / ".env"
     if env_path.exists():
-        load_dotenv(env_path)
+        load_dotenv(env_path, override=True)
+    
+    # 清除可能阻止代理的环境变量
+    if os.getenv("NO_PROXY") == "*":
+        os.environ.pop("NO_PROXY", None)
+    if os.getenv("no_proxy") == "*":
+        os.environ.pop("no_proxy", None)
     
     # 1. 从 .env 文件读取
     provider = os.getenv("AI_PROVIDER", "siliconflow")
